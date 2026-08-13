@@ -3,7 +3,10 @@
 /* eslint-disable @next/next/no-img-element */
 
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
   Box,
   Check,
   ChevronLeft,
@@ -19,27 +22,26 @@ import {
   Ruler,
   ScanLine,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   Sparkles,
   X,
 } from "lucide-react";
 import { ChangeEvent, lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import {
+  detectPlanRegions,
+  LEVEL_NAME_OPTIONS,
+  moveRegion,
+  resequenceRegions,
+  resizeRegion,
+  type SourceRegion,
+} from "./plan-regions";
 import { sampleLevels, type Level } from "./scene-data";
 
 const TwinViewer = lazy(() => import("./twin-viewer"));
 
 type AppStage = "welcome" | "analyzing" | "workspace";
 type ViewMode = "review" | "twin";
-
-type SourceRegion = {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  confidence: number;
-};
 
 const sampleRegions: SourceRegion[] = [
   { id: "ground", name: "Ground floor", x: 0.05, y: 0.14, width: 0.42, height: 0.68, confidence: 0.96 },
@@ -71,100 +73,23 @@ async function findPlanRegions(url: string): Promise<SourceRegion[]> {
     if (!context) return [];
     context.drawImage(image, 0, 0, width, height);
     const pixels = context.getImageData(0, 0, width, height).data;
-
-    const cols = 56;
-    const rows = Math.max(28, Math.round((height / width) * cols));
-    const occupied = new Uint8Array(cols * rows);
-    for (let gy = 0; gy < rows; gy += 1) {
-      for (let gx = 0; gx < cols; gx += 1) {
-        const x0 = Math.floor((gx / cols) * width);
-        const x1 = Math.max(x0 + 1, Math.floor(((gx + 1) / cols) * width));
-        const y0 = Math.floor((gy / rows) * height);
-        const y1 = Math.max(y0 + 1, Math.floor(((gy + 1) / rows) * height));
-        let dark = 0;
-        let sampled = 0;
-        for (let y = y0; y < y1; y += 2) {
-          for (let x = x0; x < x1; x += 2) {
-            const index = (y * width + x) * 4;
-            const luminance = 0.299 * pixels[index] + 0.587 * pixels[index + 1] + 0.114 * pixels[index + 2];
-            if (pixels[index + 3] > 32 && luminance < 205) dark += 1;
-            sampled += 1;
-          }
-        }
-        if (sampled > 0 && dark / sampled > 0.035) occupied[gy * cols + gx] = 1;
-      }
-    }
-
-    const expanded = new Uint8Array(occupied.length);
-    for (let y = 0; y < rows; y += 1) {
-      for (let x = 0; x < cols; x += 1) {
-        if (!occupied[y * cols + x]) continue;
-        for (let oy = -1; oy <= 1; oy += 1) {
-          for (let ox = -1; ox <= 1; ox += 1) {
-            const nx = x + ox;
-            const ny = y + oy;
-            if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) expanded[ny * cols + nx] = 1;
-          }
-        }
-      }
-    }
-
-    const visited = new Uint8Array(expanded.length);
-    const boxes: Array<{ minX: number; minY: number; maxX: number; maxY: number; cells: number }> = [];
-    for (let y = 0; y < rows; y += 1) {
-      for (let x = 0; x < cols; x += 1) {
-        const start = y * cols + x;
-        if (!expanded[start] || visited[start]) continue;
-        const queue: Array<[number, number]> = [[x, y]];
-        visited[start] = 1;
-        let minX = x;
-        let maxX = x;
-        let minY = y;
-        let maxY = y;
-        let cells = 0;
-        for (let cursor = 0; cursor < queue.length; cursor += 1) {
-          const [cx, cy] = queue[cursor];
-          cells += 1;
-          minX = Math.min(minX, cx);
-          maxX = Math.max(maxX, cx);
-          minY = Math.min(minY, cy);
-          maxY = Math.max(maxY, cy);
-          const neighbors: Array<[number, number]> = [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]];
-          neighbors.forEach(([nx, ny]) => {
-            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return;
-            const next = ny * cols + nx;
-            if (!expanded[next] || visited[next]) return;
-            visited[next] = 1;
-            queue.push([nx, ny]);
-          });
-        }
-        const boxWidth = maxX - minX + 1;
-        const boxHeight = maxY - minY + 1;
-        if (cells >= 22 && boxWidth >= 6 && boxHeight >= 6) boxes.push({ minX, minY, maxX, maxY, cells });
-      }
-    }
-
-    const selected = boxes
-      .sort((a, b) => b.cells - a.cells)
-      .slice(0, 4)
-      .sort((a, b) => (a.minY - b.minY) || (a.minX - b.minX));
-
-    if (!selected.length) {
-      return [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.58 }];
-    }
-
-    return selected.map((box, index) => ({
-      id: index === 0 ? "ground" : index === 1 ? "upper" : `level-${index + 1}`,
-      name: index === 0 ? "Ground floor" : index === 1 ? "First floor" : `Floor ${index + 1}`,
-      x: Math.max(0, (box.minX - 1) / cols),
-      y: Math.max(0, (box.minY - 1) / rows),
-      width: Math.min(1, (box.maxX - box.minX + 3) / cols),
-      height: Math.min(1, (box.maxY - box.minY + 3) / rows),
-      confidence: Math.max(0.62, 0.93 - index * 0.05),
-    }));
+    return detectPlanRegions(pixels, width, height);
   } catch {
     return [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.52 }];
   }
+}
+
+function buildPreviewLevels(regions: SourceRegion[]): Level[] {
+  return regions.map((region, index) => {
+    const template = sampleLevels[Math.min(index, sampleLevels.length - 1)];
+    return {
+      ...template,
+      id: region.id,
+      name: region.name,
+      shortName: index === 0 ? "BASE" : `${index}F`,
+      elevation: index * 3.05,
+    };
+  });
 }
 
 export default function Home() {
@@ -176,6 +101,7 @@ export default function Home() {
   const [activeLevel, setActiveLevel] = useState("ground");
   const [visibleLevels, setVisibleLevels] = useState(() => new Set(["ground", "upper"]));
   const [exploded, setExploded] = useState(false);
+  const [wallOpacity, setWallOpacity] = useState(1);
   const [analysisStep, setAnalysisStep] = useState(0);
   const [mobilePanel, setMobilePanel] = useState<"levels" | "canvas" | "details">("canvas");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -186,7 +112,9 @@ export default function Home() {
     };
   }, [imageUrl]);
 
-  const selectedLevel = sampleLevels.find((level) => level.id === activeLevel) ?? sampleLevels[0];
+  const previewLevels = buildPreviewLevels(regions);
+  const selectedRegion = regions.find((region) => region.id === activeLevel) ?? regions[0];
+  const selectedLevel = previewLevels.find((level) => level.id === activeLevel) ?? previewLevels[0] ?? sampleLevels[0];
 
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0];
@@ -209,6 +137,7 @@ export default function Home() {
     setRegions(proposedRegions);
     setActiveLevel(proposedRegions[0]?.id ?? "ground");
     setVisibleLevels(new Set(proposedRegions.slice(0, 2).map((region) => region.id)));
+    setWallOpacity(1);
     setStage("workspace");
   }
 
@@ -221,6 +150,34 @@ export default function Home() {
     });
   }
 
+  function moveLevel(id: string, offset: -1 | 1) {
+    setRegions((current) => moveRegion(current, id, offset));
+  }
+
+  function reverseLevelOrder() {
+    setRegions((current) => resequenceRegions([...current].reverse()));
+  }
+
+  function renameLevel(id: string, name: string) {
+    setRegions((current) => current.map((region) => (
+      region.id === id ? { ...region, name, nameEdited: true } : region
+    )));
+  }
+
+  function resizeLevelBoundary(id: string, amount: number) {
+    setRegions((current) => current.map((region) => (
+      region.id === id ? resizeRegion(region, amount) : region
+    )));
+  }
+
+  function toggleOutdoorArea(id: string, included: boolean) {
+    setRegions((current) => current.map((region) => {
+      if (region.id !== id) return region;
+      const next = { ...region, hasOutdoorArea: included };
+      return included && !region.hasOutdoorArea ? resizeRegion(next, 0.035) : next;
+    }));
+  }
+
   if (stage === "analyzing") return <AnalysisScreen step={analysisStep} />;
 
   if (stage === "workspace") {
@@ -230,16 +187,25 @@ export default function Home() {
         exploded={exploded}
         imageUrl={imageUrl}
         mobilePanel={mobilePanel}
+        moveLevel={moveLevel}
+        previewLevels={previewLevels}
         regions={regions}
+        renameLevel={renameLevel}
+        resizeLevelBoundary={resizeLevelBoundary}
+        reverseLevelOrder={reverseLevelOrder}
         selectedLevel={selectedLevel}
+        selectedRegion={selectedRegion}
         setActiveLevel={setActiveLevel}
         setExploded={setExploded}
         setMobilePanel={setMobilePanel}
         setStage={setStage}
         setViewMode={setViewMode}
+        setWallOpacity={setWallOpacity}
         toggleLevel={toggleLevel}
+        toggleOutdoorArea={toggleOutdoorArea}
         viewMode={viewMode}
         visibleLevels={visibleLevels}
+        wallOpacity={wallOpacity}
       />
     );
   }
@@ -320,31 +286,49 @@ function Workspace({
   exploded,
   imageUrl,
   mobilePanel,
+  moveLevel,
+  previewLevels,
   regions,
+  renameLevel,
+  resizeLevelBoundary,
+  reverseLevelOrder,
   selectedLevel,
+  selectedRegion,
   setActiveLevel,
   setExploded,
   setMobilePanel,
   setStage,
   setViewMode,
+  setWallOpacity,
   toggleLevel,
+  toggleOutdoorArea,
   viewMode,
   visibleLevels,
+  wallOpacity,
 }: {
   activeLevel: string;
   exploded: boolean;
   imageUrl: string | null;
   mobilePanel: "levels" | "canvas" | "details";
+  moveLevel: (id: string, offset: -1 | 1) => void;
+  previewLevels: Level[];
   regions: SourceRegion[];
+  renameLevel: (id: string, name: string) => void;
+  resizeLevelBoundary: (id: string, amount: number) => void;
+  reverseLevelOrder: () => void;
   selectedLevel: Level;
+  selectedRegion: SourceRegion;
   setActiveLevel: (id: string) => void;
   setExploded: (value: boolean) => void;
   setMobilePanel: (panel: "levels" | "canvas" | "details") => void;
   setStage: (stage: AppStage) => void;
   setViewMode: (mode: ViewMode) => void;
+  setWallOpacity: (opacity: number) => void;
   toggleLevel: (id: string) => void;
+  toggleOutdoorArea: (id: string, included: boolean) => void;
   viewMode: ViewMode;
   visibleLevels: Set<string>;
+  wallOpacity: number;
 }) {
   return (
     <main className="workspace-shell">
@@ -365,31 +349,56 @@ function Workspace({
           <p className="panel-intro">Confirm that the plan regions belong to separate floors.</p>
           <div className="level-list">
             {regions.map((region, index) => {
-              const level = sampleLevels[index] ?? sampleLevels[1];
+              const level = previewLevels[index] ?? sampleLevels[1];
               const selected = activeLevel === region.id;
               const visible = visibleLevels.has(region.id);
               return (
-                <button key={region.id} className={`level-card ${selected ? "selected" : ""}`} onClick={() => setActiveLevel(region.id)}>
+                <div
+                  key={region.id}
+                  className={`level-card ${selected ? "selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setActiveLevel(region.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setActiveLevel(region.id);
+                  }}
+                >
                   <span className="level-thumb"><PlanLines variant={index === 0 ? "ground" : "upper"} /></span>
                   <span className="level-card-copy">
                     <small>{index === 0 ? "BASE LEVEL" : `LEVEL ${index + 1}`}</small>
                     <strong>{region.name}</strong>
-                    <em>{level.area.toFixed(1)} m² · {Math.round(region.confidence * 100)}% match</em>
+                    <em>{level.area.toFixed(1)} m² · {Math.round(region.confidence * 100)}% match{region.hasOutdoorArea ? " · outdoor" : ""}</em>
                   </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="visibility-toggle"
-                    aria-label={`${visible ? "Hide" : "Show"} ${region.name}`}
-                    onClick={(event) => { event.stopPropagation(); toggleLevel(region.id); }}
-                    onKeyDown={(event) => { if (event.key === "Enter") toggleLevel(region.id); }}
-                  >
-                    {visible ? <Eye size={16} /> : <EyeOff size={16} />}
+                  <span className="level-card-actions">
+                    <button
+                      disabled={index === 0}
+                      aria-label={`Move ${region.name} down in the building`}
+                      onClick={(event) => { event.stopPropagation(); moveLevel(region.id, -1); }}
+                    >
+                      <ArrowDown size={14} />
+                    </button>
+                    <button
+                      disabled={index === regions.length - 1}
+                      aria-label={`Move ${region.name} up in the building`}
+                      onClick={(event) => { event.stopPropagation(); moveLevel(region.id, 1); }}
+                    >
+                      <ArrowUp size={14} />
+                    </button>
+                    <button
+                      className="visibility-toggle"
+                      aria-label={`${visible ? "Hide" : "Show"} ${region.name}`}
+                      onClick={(event) => { event.stopPropagation(); toggleLevel(region.id); }}
+                    >
+                      {visible ? <Eye size={16} /> : <EyeOff size={16} />}
+                    </button>
                   </span>
-                </button>
+                </div>
               );
             })}
           </div>
+          {regions.length > 1 && (
+            <button className="secondary-button" onClick={reverseLevelOrder}><ArrowUpDown size={16} /> Reverse floor order</button>
+          )}
           <button className="secondary-button"><ScanLine size={16} /> Split or add a level</button>
           <div className="rail-tip"><Sparkles size={15} /><span>We use whitespace, labels and disconnected structure to propose separate floors.</span></div>
         </aside>
@@ -411,8 +420,22 @@ function Workspace({
               <PlanReview imageUrl={imageUrl} regions={regions} activeLevel={activeLevel} setActiveLevel={setActiveLevel} />
             ) : (
               <Suspense fallback={<div className="viewer-loading"><Box size={22} /><span>Building the 3D twin…</span></div>}>
-                <TwinViewer exploded={exploded} visibleLevels={visibleLevels} />
+                <TwinViewer exploded={exploded} levels={previewLevels} visibleLevels={visibleLevels} wallOpacity={wallOpacity} />
               </Suspense>
+            )}
+            {viewMode === "twin" && (
+              <label className="wall-opacity-control">
+                <span><SlidersHorizontal size={14} /> Wall opacity</span>
+                <input
+                  type="range"
+                  min="0.15"
+                  max="1"
+                  step="0.05"
+                  value={wallOpacity}
+                  onChange={(event) => setWallOpacity(Number(event.target.value))}
+                />
+                <output>{Math.round(wallOpacity * 100)}%</output>
+              </label>
             )}
             <div className="canvas-hint">
               {viewMode === "review" ? <><ScanLine size={14} /> Tap a region to review that level</> : <><Move3D size={14} /> Drag to orbit · Pinch to zoom</>}
@@ -423,10 +446,34 @@ function Workspace({
         <aside className={`detail-panel ${mobilePanel === "details" ? "mobile-active" : ""}`}>
           <div className="panel-heading details-heading">
             <div><span className="panel-kicker">Review status</span><h2>{selectedLevel.name}</h2></div>
-            <span className="match-badge"><Check size={13} /> {activeLevel === "ground" ? "96" : "91"}%</span>
+            <span className="match-badge"><Check size={13} /> {Math.round(selectedRegion.confidence * 100)}%</span>
           </div>
 
           <div className="progress-row"><span><i className="complete" /><i className="complete" /><i className="complete" /><i /></span><em>3 of 4 checks</em></div>
+
+          <div className="detail-section correction-section">
+            <span className="detail-label">Level identity</span>
+            <label className="level-name-field">
+              <span>Which floor is this?</span>
+              <select value={selectedRegion.name} onChange={(event) => renameLevel(selectedRegion.id, event.target.value)}>
+                {LEVEL_NAME_OPTIONS.map((name) => <option key={name} value={name}>{name}</option>)}
+                {!LEVEL_NAME_OPTIONS.includes(selectedRegion.name) && <option value={selectedRegion.name}>{selectedRegion.name}</option>}
+              </select>
+            </label>
+            <label className="outdoor-area-toggle">
+              <input
+                type="checkbox"
+                aria-label="Balcony or terrace belongs to this level"
+                checked={Boolean(selectedRegion.hasOutdoorArea)}
+                onChange={(event) => toggleOutdoorArea(selectedRegion.id, event.target.checked)}
+              />
+              <span><strong>Balcony or terrace belongs to this level</strong><small>Includes nearby exterior lines in the plan boundary.</small></span>
+            </label>
+            <div className="boundary-controls">
+              <button onClick={() => resizeLevelBoundary(selectedRegion.id, 0.025)}><Maximize2 size={14} /> Include more</button>
+              <button onClick={() => resizeLevelBoundary(selectedRegion.id, -0.025)}><ScanLine size={14} /> Tighten outline</button>
+            </div>
+          </div>
 
           <div className="detail-section">
             <span className="detail-label">Structure</span>
@@ -478,7 +525,10 @@ function PlanReview({ imageUrl, regions, activeLevel, setActiveLevel }: { imageU
             style={{ left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.width * 100}%`, height: `${region.height * 100}%` }}
             onClick={() => setActiveLevel(region.id)}
           >
-            <span>{index + 1}</span><strong>{region.name}</strong><em>{Math.round(region.confidence * 100)}%</em>
+            <span>{index + 1}</span>
+            <strong>{region.name}</strong>
+            <em>{Math.round(region.confidence * 100)}%</em>
+            {region.hasOutdoorArea && <small>Balcony / terrace included</small>}
           </button>
         ))}
       </div>
