@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { detectPlanRegions } from "../app/plan-regions.ts";
 
 const fixtureDirectory = new URL("./fixtures/floorplans/", import.meta.url);
 const manifestUrl = new URL("manifest.json", fixtureDirectory);
@@ -25,6 +26,8 @@ function readPngDimensions(buffer) {
 if (!manifest) {
   test("private floorplan corpus is optional in repository checkouts", { skip: "local-only fixtures are absent" }, () => {});
 } else {
+  const { default: sharp } = await import("sharp");
+
   test("floorplan regression manifest has the agreed level labels", () => {
     assert.equal(manifest.schemaVersion, 1);
     assert.equal(manifest.trainingUseApproved, false);
@@ -51,6 +54,22 @@ if (!manifest) {
         width: fixture.width,
         height: fixture.height,
       });
+    });
+
+    test(`${fixture.id} proposes the expected number of floor regions`, async () => {
+      const buffer = await readFile(new URL(fixture.file, fixtureDirectory));
+      const maxSide = 720;
+      const scale = Math.min(1, maxSide / Math.max(fixture.width, fixture.height));
+      const width = Math.max(1, Math.round(fixture.width * scale));
+      const height = Math.max(1, Math.round(fixture.height * scale));
+      const { data, info } = await sharp(buffer)
+        .resize(width, height, { fit: "fill" })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const regions = detectPlanRegions(data, info.width, info.height);
+
+      assert.equal(regions.length, fixture.expectedLevelCount);
     });
   }
 }

@@ -5,9 +5,19 @@
 import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { ReactNode } from "react";
-import { sampleLevels, type Level, type Wall } from "./scene-data";
+import { type Level, type Wall } from "./scene-data";
 
-export default function TwinViewer({ exploded, visibleLevels }: { exploded: boolean; visibleLevels: Set<string> }) {
+export default function TwinViewer({
+  exploded,
+  levels,
+  visibleLevels,
+  wallOpacity,
+}: {
+  exploded: boolean;
+  levels: Level[];
+  visibleLevels: Set<string>;
+  wallOpacity: number;
+}) {
   return (
     <div className="twin-canvas">
       <Canvas shadows dpr={[1, 1.75]} camera={{ position: [12, 10, 14], fov: 36, near: 0.1, far: 100 }}>
@@ -15,8 +25,8 @@ export default function TwinViewer({ exploded, visibleLevels }: { exploded: bool
         <ambientLight intensity={1.25} />
         <directionalLight position={[7, 12, 6]} intensity={2.1} castShadow shadow-mapSize={[1024, 1024]} />
         <group position={[0, -1.25, 0]}>
-          {sampleLevels.map((level, index) => visibleLevels.has(level.id) && (
-            <LevelModel key={level.id} level={level} explodeOffset={exploded ? index * 2.35 : 0} />
+          {levels.map((level, index) => visibleLevels.has(level.id) && (
+            <LevelModel key={level.id} level={level} explodeOffset={exploded ? index * 2.35 : 0} wallOpacity={wallOpacity} />
           ))}
           <ContactShadows position={[0, -0.03, 0]} opacity={0.24} scale={24} blur={2.8} far={12} />
         </group>
@@ -28,7 +38,7 @@ export default function TwinViewer({ exploded, visibleLevels }: { exploded: bool
   );
 }
 
-function LevelModel({ level, explodeOffset }: { level: Level; explodeOffset: number }) {
+function LevelModel({ level, explodeOffset, wallOpacity }: { level: Level; explodeOffset: number; wallOpacity: number }) {
   const y = level.elevation + explodeOffset;
   return (
     <group>
@@ -40,12 +50,12 @@ function LevelModel({ level, explodeOffset }: { level: Level; explodeOffset: num
         <boxGeometry args={[level.slab.width - 0.16, 0.05, level.slab.depth - 0.16]} />
         <meshStandardMaterial color="#eee8da" roughness={0.82} />
       </mesh>
-      {level.walls.map((wall) => <WallModel key={wall.id} wall={wall} elevation={y} levelHeight={level.ceilingHeight} />)}
+      {level.walls.map((wall) => <WallModel key={wall.id} wall={wall} elevation={y} levelHeight={level.ceilingHeight} wallOpacity={wallOpacity} />)}
     </group>
   );
 }
 
-function WallModel({ wall, elevation, levelHeight }: { wall: Wall; elevation: number; levelHeight: number }) {
+function WallModel({ wall, elevation, levelHeight, wallOpacity }: { wall: Wall; elevation: number; levelHeight: number; wallOpacity: number }) {
   const dx = wall.end[0] - wall.start[0];
   const dz = wall.end[1] - wall.start[1];
   const length = Math.hypot(dx, dz);
@@ -55,16 +65,16 @@ function WallModel({ wall, elevation, levelHeight }: { wall: Wall; elevation: nu
   let cursor = 0;
 
   const clamp = (value: number) => Math.max(0, Math.min(length, value));
-  const addBox = (key: string, from: number, to: number, height: number, base: number, color = "#f3f0e8", opacity = 1) => {
+  const addBox = (key: string, from: number, to: number, height: number, base: number, color = "#f3f0e8", opacity = wallOpacity) => {
     if (to - from <= 0.02 || height <= 0.02) return;
     const distance = (from + to) / 2;
     const t = distance / length;
     const x = wall.start[0] + dx * t;
     const z = wall.start[1] + dz * t;
     pieces.push(
-      <mesh key={key} position={[x, elevation + base + height / 2, z]} rotation={[0, -angle, 0]} castShadow receiveShadow>
+      <mesh key={key} position={[x, elevation + base + height / 2, z]} rotation={[0, -angle, 0]} castShadow={opacity > 0.72} receiveShadow>
         <boxGeometry args={[to - from, height, wall.thickness ?? 0.18]} />
-        <meshStandardMaterial color={color} roughness={0.72} transparent={opacity < 1} opacity={opacity} />
+        <meshStandardMaterial color={color} roughness={0.72} transparent={opacity < 1} opacity={opacity} depthWrite={opacity >= 0.99} />
       </mesh>,
     );
   };
