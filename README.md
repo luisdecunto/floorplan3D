@@ -34,7 +34,17 @@ npm test
 
 The browser owns responsive review and derived 3D rendering. The canonical model stores metric building structure, not meshes. Later, uploaded source documents will be processed by a separate Python/GPU service and returned as editable level, wall, opening and room proposals.
 
-The website is built with React, TypeScript, vinext, React Three Fiber and Three.js. Hosting metadata lives in `.openai/hosting.json`.
+The website is built with React, TypeScript, React Three Fiber and Three.js. The same client application has two build targets while the hosting migration is in progress: vinext for the existing Sites deployment and a static Vite bundle for GitHub Pages.
+
+## GitHub Pages
+
+Build the static site locally with:
+
+```bash
+npm run validate:pages
+```
+
+The generated site lives in `pages-dist/`. GitHub Actions validates and deploys that directory on every push to `main`. The default project path is `/floorplan3D/`; set `PAGES_BASE_PATH=/` when moving to a custom domain.
 
 ## Regression fixtures
 
