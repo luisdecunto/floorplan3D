@@ -48,4 +48,4 @@ The generated site lives in `pages-dist/`. GitHub Actions validates and deploys 
 
 ## Regression fixtures
 
-User-supplied floorplans that are approved for internal product testing live in `tests/fixtures/floorplans`. The manifest records the expected number and arrangement of plan regions, integrity hashes, and known parsing challenges. These files are not production assets, are excluded from the deployed website bundle, and are not approved for model training or public redistribution.
+When present in a local checkout, user-supplied floorplans approved for internal product testing live in the Git-ignored `tests/fixtures/floorplans` directory. The local manifest records expected floor counts, arrangements, integrity hashes, and parsing challenges. These files are not repository or production assets, are excluded from deployment, and are not approved for model training or public redistribution.
