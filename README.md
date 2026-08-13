@@ -35,3 +35,7 @@ npm test
 The browser owns responsive review and derived 3D rendering. The canonical model stores metric building structure, not meshes. Later, uploaded source documents will be processed by a separate Python/GPU service and returned as editable level, wall, opening and room proposals.
 
 The website is built with React, TypeScript, vinext, React Three Fiber and Three.js. Hosting metadata lives in `.openai/hosting.json`.
+
+## Regression fixtures
+
+User-supplied floorplans that are approved for internal product testing live in `tests/fixtures/floorplans`. The manifest records the expected number and arrangement of plan regions, integrity hashes, and known parsing challenges. These files are not production assets, are excluded from the deployed website bundle, and are not approved for model training or public redistribution.
