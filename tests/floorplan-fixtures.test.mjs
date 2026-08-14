@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { detectPlanRegions } from "../app/plan-regions.ts";
-import { detectFloorStructures } from "../app/structure-detector.ts";
+import { alignAdjacentStairStructures, detectFloorStructures } from "../app/structure-detector.ts";
 
 const fixtureDirectory = new URL("./fixtures/floorplans/", import.meta.url);
 const manifestUrl = new URL("manifest.json", fixtureDirectory);
@@ -87,6 +87,12 @@ if (!manifest) {
         assert.equal(bottomPlan.stairs.length, 1, "ground-floor stair symbol should be retained");
         assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
         assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
+        const aligned = alignAdjacentStairStructures([regions[1], regions[0]], structures);
+        const alignedBottom = aligned[regions[1].id].stairs[0];
+        const topStair = topPlan.stairs[0];
+        const bottomCenter = (alignedBottom.x + alignedBottom.width / 2 - bottomPlan.footprint.x) / bottomPlan.footprint.width;
+        const topCenter = (topStair.x + topStair.width / 2 - topPlan.footprint.x) / topPlan.footprint.width;
+        assert.ok(Math.abs(bottomCenter - topCenter) < 0.0001, "both analyser stair boxes should share one shaft center");
       }
     });
   }

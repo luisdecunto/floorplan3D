@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildStairConnections, sceneFootprint, slabPieces, stairwellOpening } from "../app/scene-geometry.ts";
-import { detectFloorStructure, structureToLevel } from "../app/structure-detector.ts";
+import { alignAdjacentStairStructures, detectFloorStructure, structureToLevel } from "../app/structure-detector.ts";
 
 function syntheticPlan() {
   const width = 240;
@@ -76,6 +76,38 @@ test("detected pixel geometry is converted into a non-sample 3D level", () => {
   assert.ok(footprint.centerZ > level.slab.z, "viewer framing should include the exterior platform");
 });
 
+test("adjacent floors share the upper-floor stair shaft in analyser coordinates", () => {
+  const lower = {
+    regionId: "lower",
+    sourceWidth: 320,
+    sourceHeight: 620,
+    walls: [],
+    outdoorAreas: [],
+    stairs: [{ id: "lower-stair", runAxis: "vertical", x: 168, y: 348, width: 45, height: 83, stepCount: 16, confidence: 0.78 }],
+    footprint: { x: 52, y: 356, width: 226, height: 184 },
+    roomCount: 0,
+    confidence: 0.8,
+    diagnostics: { threshold: 0, wallThickness: 6, geometryVotes: 0, topologyVotes: 0, openingVotes: 0, stairVotes: 1 },
+  };
+  const upper = {
+    ...lower,
+    regionId: "upper",
+    stairs: [{ id: "upper-stair", runAxis: "vertical", x: 139, y: 16, width: 53, height: 74, stepCount: 12, confidence: 0.82 }],
+    footprint: { x: 52, y: 23, width: 226, height: 186 },
+  };
+  const regions = [
+    { id: "lower", name: "Ground floor", x: 0, y: 0.5, width: 1, height: 0.5, confidence: 0.8 },
+    { id: "upper", name: "First floor", x: 0, y: 0, width: 1, height: 0.5, confidence: 0.8 },
+  ];
+  const aligned = alignAdjacentStairStructures(regions, { lower, upper });
+  const lowerBox = aligned.lower.stairs[0];
+  const upperBox = aligned.upper.stairs[0];
+  const lowerCenter = (lowerBox.x + lowerBox.width / 2 - lower.footprint.x) / lower.footprint.width;
+  const upperCenter = (upperBox.x + upperBox.width / 2 - upper.footprint.x) / upper.footprint.width;
+  assert.ok(Math.abs(lowerCenter - upperCenter) < 0.0001);
+  assert.ok(Math.abs(lowerBox.width / lower.footprint.width - upperBox.width / upper.footprint.width) < 0.0001);
+});
+
 test("half-paced stairs use opposing flights, a half-height landing and an upper slab opening", () => {
   const base = {
     shortName: "GF",
@@ -129,6 +161,7 @@ test("half-paced stairs use opposing flights, a half-height landing and an upper
   const openingRight = opening.x + opening.width / 2;
   const openingBack = opening.z - opening.depth / 2;
   const openingFront = opening.z + opening.depth / 2;
+  assert.ok(Math.abs(connections[0].upperFlight.end[1] - openingFront) < 0.0001, "the top tread should meet the upper-floor slab");
   assert.ok(connections[0].landing.x - connections[0].landing.width / 2 >= openingLeft);
   assert.ok(connections[0].landing.x + connections[0].landing.width / 2 <= openingRight);
   assert.ok(connections[0].landing.z - connections[0].landing.depth / 2 >= openingBack, "the landing must not project through the rear wall");

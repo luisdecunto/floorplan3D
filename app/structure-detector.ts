@@ -1247,6 +1247,65 @@ export function detectFloorStructures(
   return Object.fromEntries(regions.map((region) => [region.id, detectFloorStructure(pixels, width, height, region)]));
 }
 
+function normalizedStairBox(stair: DetectedStair, footprint: DetectedStructure["footprint"]) {
+  return {
+    x: (stair.x - footprint.x) / Math.max(1, footprint.width),
+    y: (stair.y - footprint.y) / Math.max(1, footprint.height),
+    width: stair.width / Math.max(1, footprint.width),
+    height: stair.height / Math.max(1, footprint.height),
+    centerX: (stair.x + stair.width / 2 - footprint.x) / Math.max(1, footprint.width),
+    centerY: (stair.y + stair.height / 2 - footprint.y) / Math.max(1, footprint.height),
+  };
+}
+
+/**
+ * Adjacent floorplans describe the same physical stair shaft with different
+ * amounts of linework. Once the floor order is known, use the upper-floor
+ * shaft (where the full opening is visible) as the shared normalized box for
+ * the floor below. This keeps the analyser overlay and the 3D coordinate
+ * conversion on one common vertical axis.
+ */
+export function alignAdjacentStairStructures(
+  regions: SourceRegion[],
+  structures: Record<string, DetectedStructure>,
+) {
+  const aligned = { ...structures };
+  for (let index = regions.length - 2; index >= 0; index -= 1) {
+    const lower = aligned[regions[index].id];
+    const upper = aligned[regions[index + 1].id];
+    if (!lower?.stairs.length || !upper?.stairs.length) continue;
+    const upperStair = [...upper.stairs].sort((a, b) => b.confidence - a.confidence)[0];
+    const upperBox = normalizedStairBox(upperStair, upper.footprint);
+    const candidates = lower.stairs
+      .map((stair) => {
+        const box = normalizedStairBox(stair, lower.footprint);
+        return {
+          stair,
+          box,
+          distance: Math.hypot(box.centerX - upperBox.centerX, box.centerY - upperBox.centerY),
+        };
+      })
+      .filter(({ stair }) => stair.runAxis === upperStair.runAxis)
+      .sort((a, b) => a.distance - b.distance);
+    const match = candidates[0];
+    if (!match || match.distance > 0.22) continue;
+    const projected: DetectedStair = {
+      ...match.stair,
+      runAxis: upperStair.runAxis,
+      x: lower.footprint.x + upperBox.x * lower.footprint.width,
+      y: lower.footprint.y + upperBox.y * lower.footprint.height,
+      width: upperBox.width * lower.footprint.width,
+      height: upperBox.height * lower.footprint.height,
+      confidence: Math.max(match.stair.confidence, upperStair.confidence * 0.94),
+    };
+    aligned[regions[index].id] = {
+      ...lower,
+      stairs: lower.stairs.map((stair) => stair.id === match.stair.id ? projected : stair),
+    };
+  }
+  return aligned;
+}
+
 export function structureToLevel(
   structure: DetectedStructure,
   region: SourceRegion,
