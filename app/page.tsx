@@ -38,6 +38,7 @@ import {
 } from "./plan-regions";
 import { sampleLevels, type Level } from "./scene-data";
 import {
+  alignAdjacentStairStructures,
   detectFloorStructures,
   structureToLevel,
   type DetectedStructure,
@@ -81,7 +82,7 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
     context.drawImage(image, 0, 0, width, height);
     const pixels = context.getImageData(0, 0, width, height).data;
     let regions = detectPlanRegions(pixels, width, height);
-    const structures = detectFloorStructures(pixels, width, height, regions);
+    let structures = detectFloorStructures(pixels, width, height, regions);
     Object.values(structures).forEach((structure) => {
       const cropX = Math.max(0, Math.floor(structure.footprint.x));
       const cropY = Math.max(0, Math.floor(structure.footprint.y));
@@ -113,6 +114,7 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
         ]);
       }
     }
+    structures = alignAdjacentStairStructures(regions, structures);
     return { regions, structures, size: { width, height } };
   } catch {
     const regions = [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.42 }];

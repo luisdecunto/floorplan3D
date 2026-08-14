@@ -165,9 +165,12 @@ export function buildStairConnections(levels: Level[], explodeDistance = 0): Sta
       : Math.abs(lowerEnds.front[1] - upperEnds.front[1]);
     const desiredSeparation = detectedSeparation > flightWidth * 0.35 ? detectedSeparation : flightWidth * 0.96;
     const laneSeparation = clamp(desiredSeparation, flightWidth * 0.72, Math.max(flightWidth * 0.72, availableCross - flightWidth));
-    const laneDirection = verticalRun
-      ? Math.sign(lowerEnds.front[0] - upperEnds.front[0]) || 1
-      : Math.sign(lowerEnds.front[1] - upperEnds.front[1]) || 1;
+    const crossDelta = verticalRun
+      ? lowerEnds.front[0] - upperEnds.front[0]
+      : lowerEnds.front[1] - upperEnds.front[1];
+    // Normalized shafts can differ by floating-point dust. Treat them as
+    // aligned so the lower flight consistently starts on the right-hand lane.
+    const laneDirection = Math.abs(crossDelta) > 0.04 ? Math.sign(crossDelta) : 1;
     const crossCenter = verticalRun ? opening.x : opening.z;
     const lowerLane = crossCenter + laneDirection * laneSeparation / 2;
     const upperLane = crossCenter - laneDirection * laneSeparation / 2;
@@ -178,10 +181,10 @@ export function buildStairConnections(levels: Level[], explodeDistance = 0): Sta
     const landingCenter = landingRear + landingRun / 2;
     const landingJoint = landingRear + landingRun;
     const flightFrontLimit = openingFront - clearance;
-    const minimumRun = Math.min(0.48, Math.max(0.24, (flightFrontLimit - landingJoint) * 0.3));
-    const fitFront = (value: number) => clamp(value, landingJoint + minimumRun, flightFrontLimit);
-    const lowerFront = fitFront(verticalRun ? lowerEnds.front[1] : lowerEnds.front[0]);
-    const upperFront = fitFront(verticalRun ? upperEnds.front[1] : upperEnds.front[0]);
+    const lowerFront = flightFrontLimit;
+    // The last tread is the upper-floor landing: it must meet the slab edge,
+    // rather than stop at the shorter linework detected inside the stair symbol.
+    const upperFront = openingFront;
     const lowerStart: [number, number] = verticalRun ? [lowerLane, lowerFront] : [lowerFront, lowerLane];
     const lowerLanding: [number, number] = verticalRun ? [lowerLane, landingJoint] : [landingJoint, lowerLane];
     const upperLanding: [number, number] = verticalRun ? [upperLane, landingJoint] : [landingJoint, upperLane];
