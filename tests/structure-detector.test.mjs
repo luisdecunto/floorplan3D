@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStairConnections, sceneFootprint, slabPieces, stairwellOpening } from "../app/scene-geometry.ts";
+import { buildStairConnections, sceneFootprint, slabPieces, slabPieceTextureUv, stairwellOpening } from "../app/scene-geometry.ts";
 import { alignAdjacentStairStructures, detectFloorStructure, structureToLevel } from "../app/structure-detector.ts";
 
 function syntheticPlan() {
@@ -176,4 +176,19 @@ test("half-paced stairs use opposing flights, a half-height landing and an upper
   assert.equal(pieces.length, 4);
   const remainingArea = pieces.reduce((sum, piece) => sum + piece.width * piece.depth, 0);
   assert.ok(Math.abs(remainingArea - (upper.slab.width * upper.slab.depth - opening.width * opening.depth)) < 0.0001);
+
+  const slabLeft = upper.slab.x - upper.slab.width / 2;
+  const slabBack = upper.slab.z - upper.slab.depth / 2;
+  const openingLeftU = (opening.x - opening.width / 2 - slabLeft) / upper.slab.width;
+  const openingRightU = (opening.x + opening.width / 2 - slabLeft) / upper.slab.width;
+  const openingBackV = 1 - (opening.z - opening.depth / 2 - slabBack) / upper.slab.depth;
+  const openingFrontV = 1 - (opening.z + opening.depth / 2 - slabBack) / upper.slab.depth;
+  const leftUv = slabPieceTextureUv(upper, pieces.find((piece) => piece.id === "left"));
+  const rightUv = slabPieceTextureUv(upper, pieces.find((piece) => piece.id === "right"));
+  const backUv = slabPieceTextureUv(upper, pieces.find((piece) => piece.id === "back"));
+  const frontUv = slabPieceTextureUv(upper, pieces.find((piece) => piece.id === "front"));
+  assert.ok(Math.abs(leftUv[2] - openingLeftU) < 0.0001, "left plan fragment should end at the opening's exact image coordinate");
+  assert.ok(Math.abs(rightUv[0] - openingRightU) < 0.0001, "right plan fragment should begin at the opening's exact image coordinate");
+  assert.ok(Math.abs(backUv[5] - openingBackV) < 0.0001, "back plan fragment should end at the opening's exact image coordinate");
+  assert.ok(Math.abs(frontUv[1] - openingFrontV) < 0.0001, "front plan fragment should begin at the opening's exact image coordinate");
 });
