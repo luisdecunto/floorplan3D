@@ -383,6 +383,76 @@ function structuralSegments(segments: Segment[], minimumDimension: number, wallT
   });
 }
 
+function recoverWallAnchors(
+  segments: Segment[],
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  footprint: Bounds,
+  wallThickness: number,
+) {
+  const clusters: Segment[][] = [];
+  segments.forEach((segment) => {
+    const cluster = clusters.find((candidate) => candidate[0].axis === segment.axis && Math.abs(candidate[0].line - segment.line) <= Math.max(3, wallThickness * 0.7));
+    if (cluster) cluster.push(segment);
+    else clusters.push([segment]);
+  });
+
+  const anchors: Segment[] = [];
+  clusters.forEach((cluster) => {
+    const axis = cluster[0].axis;
+    const line = cluster.reduce((sum, segment) => sum + segment.line, 0) / cluster.length;
+    const nearOuter = axis === "horizontal"
+      ? Math.min(Math.abs(line - footprint.minY), Math.abs(line - footprint.maxY)) <= wallThickness * 2.2
+      : Math.min(Math.abs(line - footprint.minX), Math.abs(line - footprint.maxX)) <= wallThickness * 2.2;
+    const scanFrom = nearOuter
+      ? (axis === "horizontal" ? footprint.minX : footprint.minY)
+      : Math.min(...cluster.map((segment) => segment.from));
+    const scanTo = nearOuter
+      ? (axis === "horizontal" ? footprint.maxX : footprint.maxY)
+      : Math.max(...cluster.map((segment) => segment.to));
+    const thickness = nearOuter
+      ? Math.max(wallThickness, ...cluster.map((segment) => segment.thickness))
+      : Math.max(2, ...cluster.map((segment) => segment.thickness));
+    const radius = Math.max(2, Math.round(thickness / 2));
+    let start = -1;
+    let lastSolid = -1;
+    let gap = 0;
+    const flush = () => {
+      if (start < 0 || lastSolid - start + 1 < Math.max(4, wallThickness * 0.58)) return;
+      anchors.push({ axis, line, from: start, to: lastSolid, thickness, density: 0.78 });
+    };
+
+    for (let coordinate = Math.floor(scanFrom); coordinate <= Math.ceil(scanTo); coordinate += 1) {
+      let dark = 0;
+      let sampled = 0;
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const x = Math.round(axis === "horizontal" ? coordinate : line + offset);
+        const y = Math.round(axis === "horizontal" ? line + offset : coordinate);
+        if (x < 0 || x >= width || y < 0 || y >= height) continue;
+        if (mask[y * width + x]) dark += 1;
+        sampled += 1;
+      }
+      const solid = dark / Math.max(1, sampled) >= 0.48;
+      if (solid) {
+        if (start < 0) start = coordinate;
+        lastSolid = coordinate;
+        gap = 0;
+      } else if (start >= 0) {
+        gap += 1;
+        if (gap > 1) {
+          flush();
+          start = -1;
+          lastSolid = -1;
+          gap = 0;
+        }
+      }
+    }
+    flush();
+  });
+  return mergeOverlaps([...segments, ...anchors]);
+}
+
 function longestPerpendicularRun(mask: Uint8Array, width: number, height: number, axis: Axis, coordinate: number, line: number, radius: number) {
   let longest = 0;
   for (let offset = -2; offset <= 2; offset += 1) {
@@ -453,6 +523,9 @@ function gapEvidence(
     ? Math.min(Math.abs(line - footprint.minY), Math.abs(line - footprint.maxY)) <= outerTolerance
     : Math.min(Math.abs(line - footprint.minX), Math.abs(line - footprint.maxX)) <= outerTolerance;
 
+  if (onOuterWall && windowParallel >= 0.58) {
+    return { kind: "window", confidence: clamp(0.62 + windowParallel * 0.3, 0.64, 0.94) };
+  }
   if (perpendicular >= 0.34 && arcDensity >= 0.006) {
     return { kind: "door", confidence: clamp(0.56 + perpendicular * 0.23 + arcDensity * 1.5, 0.58, 0.94) };
   }
@@ -602,6 +675,81 @@ function buildWalls(
     finish();
   });
   return walls;
+}
+
+function recoverEmbeddedOpenings(
+  walls: DetectedWall[],
+  strongMask: Uint8Array,
+  mediumMask: Uint8Array,
+  width: number,
+  height: number,
+  footprint: Bounds,
+) {
+  return walls.map((wall) => {
+    const from = wall.axis === "horizontal" ? wall.start[0] : wall.start[1];
+    const to = wall.axis === "horizontal" ? wall.end[0] : wall.end[1];
+    const line = wall.axis === "horizontal" ? wall.start[1] : wall.start[0];
+    const outerTolerance = Math.max(4, wall.thickness * 2.2);
+    const onOuterWall = wall.axis === "horizontal"
+      ? Math.min(Math.abs(line - footprint.minY), Math.abs(line - footprint.maxY)) <= outerTolerance
+      : Math.min(Math.abs(line - footprint.minX), Math.abs(line - footprint.maxX)) <= outerTolerance;
+    if (onOuterWall) return wall;
+    const radius = Math.max(2, Math.round(wall.thickness / 2));
+    const span = to - from;
+    const openings = [...wall.openings];
+    let gapStart = -1;
+    let lastGap = -1;
+    let solidRun = 0;
+
+    const flush = () => {
+      if (gapStart < 0) return;
+      const gapWidth = lastGap - gapStart + 1;
+      const minimumGap = Math.max(6, wall.thickness * 0.82);
+      if (gapWidth < minimumGap || gapWidth > span * 0.34) return;
+      const overlapsKnown = openings.some((opening) => {
+        const knownFrom = from + opening.offset;
+        const knownTo = knownFrom + opening.width;
+        return Math.max(0, Math.min(lastGap, knownTo) - Math.max(gapStart, knownFrom)) >= Math.min(gapWidth, opening.width) * 0.45;
+      });
+      if (overlapsKnown) return;
+      const evidence = gapEvidence(mediumMask, width, height, wall.axis, line, gapStart, lastGap, wall.thickness, footprint);
+      if (!evidence) return;
+      openings.push({
+        kind: evidence.kind,
+        offset: gapStart - from,
+        width: gapWidth,
+        confidence: Math.max(0.56, evidence.confidence - 0.03),
+      });
+    };
+
+    for (let coordinate = Math.floor(from); coordinate <= Math.ceil(to); coordinate += 1) {
+      let dark = 0;
+      let sampled = 0;
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const x = Math.round(wall.axis === "horizontal" ? coordinate : line + offset);
+        const y = Math.round(wall.axis === "horizontal" ? line + offset : coordinate);
+        if (x < 0 || x >= width || y < 0 || y >= height) continue;
+        if (strongMask[y * width + x]) dark += 1;
+        sampled += 1;
+      }
+      const solid = dark / Math.max(1, sampled) >= 0.54;
+      if (!solid) {
+        if (gapStart < 0) gapStart = coordinate;
+        lastGap = coordinate;
+        solidRun = 0;
+      } else if (gapStart >= 0) {
+        solidRun += 1;
+        if (solidRun > 1) {
+          lastGap = coordinate - solidRun;
+          flush();
+          gapStart = -1;
+          lastGap = -1;
+          solidRun = 0;
+        }
+      }
+    }
+    return { ...wall, openings: openings.sort((a, b) => a.offset - b.offset) };
+  });
 }
 
 function overlapRatio(from: number, to: number, targetFrom: number, targetTo: number) {
@@ -797,7 +945,7 @@ export function inspectStructureEvidence(
   ));
   const wallThickness = clamp(weightedPercentile(rawSegments.filter((segment) => segment.to - segment.from >= minimumDimension * 0.1), 0.66), 2, minimumDimension * 0.07);
   const structural = structuralSegments(rawSegments, minimumDimension, wallThickness);
-  return { bounds, threshold, mediumMask, rawSegments, wallThickness, structural, minimumDimension };
+  return { bounds, threshold, strongMask, mediumMask, rawSegments, wallThickness, structural, minimumDimension };
 }
 
 export function detectFloorStructure(
@@ -806,10 +954,18 @@ export function detectFloorStructure(
   height: number,
   region: SourceRegion,
 ): DetectedStructure {
-  const { bounds, threshold, mediumMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
+  const { bounds, threshold, strongMask, mediumMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
   const thickCore = structural.filter((segment) => segment.thickness >= wallThickness * 0.62 || segment.to - segment.from >= minimumDimension * 0.3);
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
-  const walls = buildWalls(structural, mediumMask, width, height, wallThickness, footprintBounds);
+  const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
+  const walls = recoverEmbeddedOpenings(
+    buildWalls(anchoredStructural, mediumMask, width, height, wallThickness, footprintBounds),
+    strongMask,
+    mediumMask,
+    width,
+    height,
+    footprintBounds,
+  );
   const outdoorAreas = detectOutdoorAreas(rawSegments, footprintBounds, wallThickness);
   const openingCount = walls.reduce((sum, wall) => sum + wall.openings.length, 0);
   const topologyVotes = walls.filter((wall) => walls.some((other) => other !== wall && (
