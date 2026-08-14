@@ -1311,15 +1311,34 @@ export function structureToLevel(
       height: footprint.height * 0.24,
       confidence: 0.55,
     }];
-  const outdoorAreas: OutdoorArea[] = outdoorSource.map((area) => ({
-    id: area.id,
-    x: (area.x + area.width / 2 - centerX) * pixelsToMetres,
-    z: (area.y + area.height / 2 - centerY) * pixelsToMetres,
-    width: area.width * pixelsToMetres,
-    depth: area.height * pixelsToMetres,
-    side: area.side,
-    confidence: area.confidence,
-  }));
+  const outdoorAreas: OutdoorArea[] = outdoorSource.map((area) => {
+    const areaWidth = area.width * pixelsToMetres;
+    const areaDepth = area.height * pixelsToMetres;
+    let x = (area.x + area.width / 2 - centerX) * pixelsToMetres;
+    let z = (area.y + area.height / 2 - centerY) * pixelsToMetres;
+    // Attach the detected platform to the corresponding slab edge. Pixel
+    // evidence determines its span and depth, while this constraint prevents
+    // small crop/footprint disagreements from moving it under or away from the
+    // building in 3D.
+    if (area.side === "bottom") z = sceneDepth / 2 + areaDepth / 2;
+    if (area.side === "top") z = -sceneDepth / 2 - areaDepth / 2;
+    if (area.side === "right") x = sceneWidth / 2 + areaWidth / 2;
+    if (area.side === "left") x = -sceneWidth / 2 - areaWidth / 2;
+    if (area.side === "top" || area.side === "bottom") {
+      x = clamp(x, -sceneWidth / 2 + areaWidth / 2, sceneWidth / 2 - areaWidth / 2);
+    } else {
+      z = clamp(z, -sceneDepth / 2 + areaDepth / 2, sceneDepth / 2 - areaDepth / 2);
+    }
+    return {
+      id: area.id,
+      x,
+      z,
+      width: areaWidth,
+      depth: areaDepth,
+      side: area.side,
+      confidence: area.confidence,
+    };
+  });
   const stairs: Stair[] = structure.stairs.map((stair) => ({
     id: stair.id,
     x: (stair.x + stair.width / 2 - centerX) * pixelsToMetres,
