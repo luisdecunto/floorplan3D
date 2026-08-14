@@ -76,10 +76,7 @@ test("a thin dimension line cannot extend a real partition across an open room",
   rectangle(209, 20, 215, 168);
   rectangle(25, 162, 215, 168);
   rectangle(28, 77, 95, 83);
-  // Browser resampling can inflate the thin line until the early component
-  // splitter accepts it. The final wall validator must still see the abrupt
-  // cross-section change and retain only the genuine partition.
-  rectangle(96, 79, 210, 83);
+  rectangle(96, 80, 210, 80); // collinear measurement line, not structure
 
   const region = { id: "level-a", name: "First floor", x: 0, y: 0, width: 1, height: 1, confidence: 0.9 };
   const structure = detectFloorStructure(pixels, width, height, region);

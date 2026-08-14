@@ -723,77 +723,6 @@ function buildWalls(
   return walls;
 }
 
-function trimUnsupportedWallTails(
-  walls: DetectedWall[],
-  mask: Uint8Array,
-  width: number,
-  height: number,
-  minimumRun: number,
-) {
-  return walls.map((wall) => {
-    const from = wall.axis === "horizontal" ? wall.start[0] : wall.start[1];
-    const to = wall.axis === "horizontal" ? wall.end[0] : wall.end[1];
-    const line = wall.axis === "horizontal" ? wall.start[1] : wall.start[0];
-    const length = to - from + 1;
-    if (wall.openings.length || wall.thickness < 4 || length < minimumRun * 5) return wall;
-
-    const radius = Math.max(4, Math.ceil(wall.thickness));
-    const crossSections: number[] = [];
-    for (let coordinate = Math.floor(from); coordinate <= Math.ceil(to); coordinate += 1) {
-      crossSections.push(longestPerpendicularRun(mask, width, height, wall.axis, coordinate, line, radius));
-    }
-    const ranked = [...crossSections].sort((a, b) => a - b);
-    const baseline = ranked[Math.floor((ranked.length - 1) * 0.88)] ?? 0;
-    if (baseline < 4) return wall;
-
-    const minimumCrossSection = Math.max(3, Math.ceil(baseline * 0.78));
-    const gapTolerance = Math.max(1, Math.round(wall.thickness * 0.35));
-    const runs: Array<{ from: number; to: number }> = [];
-    let runStart = -1;
-    let lastSupported = -1;
-    let gap = 0;
-    const flush = () => {
-      // Ignore the short perpendicular blob where an annotation tail meets an
-      // exterior wall; it is an intersection, not sustained wall thickness.
-      if (runStart < 0 || lastSupported - runStart + 1 < Math.max(8, minimumRun, wall.thickness * 1.6)) return;
-      runs.push({ from: runStart, to: lastSupported });
-    };
-
-    crossSections.forEach((crossSection, index) => {
-      if (crossSection >= minimumCrossSection) {
-        if (runStart < 0) runStart = index;
-        lastSupported = index;
-        gap = 0;
-      } else if (runStart >= 0) {
-        gap += 1;
-        if (gap > gapTolerance) {
-          flush();
-          runStart = -1;
-          lastSupported = -1;
-          gap = 0;
-        }
-      }
-    });
-    flush();
-    if (runs.length !== 1) return wall;
-
-    const supported = runs[0];
-    const supportedFrom = from + supported.from;
-    const supportedTo = from + supported.to;
-    const edgeTolerance = Math.max(4, wall.thickness * 1.4);
-    const touchesStart = supportedFrom <= from + edgeTolerance;
-    const touchesEnd = supportedTo >= to - edgeTolerance;
-    const trimmedLength = length - (supportedTo - supportedFrom + 1);
-    if (touchesStart === touchesEnd || trimmedLength < Math.max(minimumRun * 2, length * 0.25)) return wall;
-
-    return {
-      ...wall,
-      start: wall.axis === "horizontal" ? [supportedFrom, line] : [line, supportedFrom],
-      end: wall.axis === "horizontal" ? [supportedTo, line] : [line, supportedTo],
-    };
-  });
-}
-
 function recoverEmbeddedOpenings(
   walls: DetectedWall[],
   strongMask: Uint8Array,
@@ -1373,7 +1302,7 @@ export function inspectStructureEvidence(
     && segment.thickness <= minimumDimension * 0.095
   ));
   const structural = structuralSegments(wallSegments, minimumDimension, wallThickness);
-  return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension, minimumRun };
+  return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension };
 }
 
 export function detectFloorStructure(
@@ -1382,18 +1311,12 @@ export function detectFloorStructure(
   height: number,
   region: SourceRegion,
 ): DetectedStructure {
-  const { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension, minimumRun } = inspectStructureEvidence(pixels, width, height, region);
+  const { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
   const thickCore = structural.filter((segment) => segment.thickness >= wallThickness * 0.62 || segment.to - segment.from >= minimumDimension * 0.3);
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
   const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
   const walls = recoverEmbeddedOpenings(
-    trimUnsupportedWallTails(
-      buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
-      strongMask,
-      width,
-      height,
-      minimumRun,
-    ),
+    buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
     strongMask,
     mediumMask,
     windowMask,
