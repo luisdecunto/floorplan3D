@@ -11,6 +11,7 @@ import {
   Check,
   ChevronLeft,
   CircleHelp,
+  Download,
   Eye,
   EyeOff,
   ImageUp,
@@ -25,6 +26,9 @@ import {
   SlidersHorizontal,
   Smartphone,
   Sparkles,
+  Trash2,
+  Undo2,
+  Upload,
   X,
 } from "lucide-react";
 import { ChangeEvent, lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
@@ -37,6 +41,17 @@ import {
   type SourceRegion,
 } from "./plan-regions";
 import { sampleLevels, type Level } from "./scene-data";
+import {
+  createFloorplanDocumentV2,
+  documentRegions,
+  documentStructures,
+  realignDocumentStairs,
+  removeDocumentWall,
+  suggestBuildingOrder,
+  undoLastDocumentEdit,
+  type FloorplanDocumentV2,
+} from "./floorplan-document";
+import { downloadProject, parseProject, saveProjectLocally } from "./project-storage";
 import {
   alignAdjacentStairStructures,
   detectFloorStructures,
@@ -70,7 +85,10 @@ async function loadImage(url: string) {
 async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[]; structures: StructureMap; size: AnalysisSize }> {
   try {
     const image = await loadImage(url);
-    const maxSide = 900;
+    // Preserve thin balcony rails and stair treads. At 900 px the browser's
+    // bilinear resize can erase these one-pixel signals in phone screenshots.
+    // 1280 px remains modest for mobile memory while retaining the structure.
+    const maxSide = 1280;
     const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -105,15 +123,7 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
     // A rail-enclosed exterior platform is useful ordering evidence in a
     // two-level plan: suggest the enclosed plan below the balcony level while
     // retaining the explicit reverse/relabel controls for ambiguous cases.
-    if (regions.length === 2) {
-      const withOutdoor = regions.filter((region) => structures[region.id]?.outdoorAreas.length);
-      if (withOutdoor.length === 1) {
-        regions = resequenceRegions([
-          ...regions.filter((region) => region.id !== withOutdoor[0].id),
-          withOutdoor[0],
-        ]);
-      }
-    }
+    regions = suggestBuildingOrder(regions, structures);
     structures = alignAdjacentStairStructures(regions, structures);
     return { regions, structures, size: { width, height } };
   } catch {
@@ -152,13 +162,25 @@ export default function Home() {
   const [wallOpacity, setWallOpacity] = useState(1);
   const [analysisStep, setAnalysisStep] = useState(0);
   const [mobilePanel, setMobilePanel] = useState<"levels" | "canvas" | "details">("canvas");
+  const [document, setDocument] = useState<FloorplanDocumentV2 | null>(null);
+  const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
+  const [projectMessage, setProjectMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const projectInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     return () => {
       if (imageUrl) URL.revokeObjectURL(imageUrl);
     };
   }, [imageUrl]);
+
+  useEffect(() => {
+    if (!document) return;
+    const timeout = window.setTimeout(() => {
+      saveProjectLocally(document).catch(() => setProjectMessage("Local save is unavailable in this browser."));
+    }, 220);
+    return () => window.clearTimeout(timeout);
+  }, [document]);
 
   const previewLevels = buildPreviewLevels(regions, structures);
   const selectedRegion = regions.find((region) => region.id === activeLevel) ?? regions[0];
@@ -167,9 +189,16 @@ export default function Home() {
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0];
     if (!nextFile) return;
+    const supported = ["image/jpeg", "image/png", "image/webp"].includes(nextFile.type);
+    if (!supported || nextFile.size > 20 * 1024 * 1024) {
+      setProjectMessage(!supported ? "Choose a JPG, PNG or WebP image." : "This image is larger than the 20 MB limit.");
+      event.target.value = "";
+      return;
+    }
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setFile(nextFile);
-    setImageUrl(nextFile.type.startsWith("image/") ? URL.createObjectURL(nextFile) : null);
+    setImageUrl(URL.createObjectURL(nextFile));
+    setProjectMessage(null);
   }
 
   async function analyze(useSample = false) {
@@ -193,11 +222,81 @@ export default function Home() {
     await sleep(420);
     setRegions(proposedRegions);
     setStructures(proposedStructures);
+    setDocument(!useSample && proposedSize && Object.keys(proposedStructures).length ? createFloorplanDocumentV2({
+      name: file?.name ?? "Floorplan project",
+      mimeType: file?.type ?? "image/unknown",
+      width: proposedSize.width,
+      height: proposedSize.height,
+      regions: proposedRegions,
+      structures: proposedStructures,
+    }) : null);
     setAnalysisSize(proposedSize);
     setActiveLevel(proposedRegions[0]?.id ?? "ground");
     setVisibleLevels(new Set(proposedRegions.slice(0, 2).map((region) => region.id)));
     setWallOpacity(1);
+    setSelectedWallId(null);
+    setProjectMessage(null);
     setStage("workspace");
+  }
+
+  async function importProject(event: ChangeEvent<HTMLInputElement>) {
+    const projectFile = event.target.files?.[0];
+    if (!projectFile) return;
+    try {
+      const imported = parseProject(await projectFile.text());
+      setDocument(imported);
+      setRegions(documentRegions(imported));
+      setStructures(documentStructures(imported));
+      setAnalysisSize({ width: imported.source.width, height: imported.source.height });
+      setActiveLevel(imported.levels[0].id);
+      setVisibleLevels(new Set(imported.levels.map((level) => level.id)));
+      setSelectedWallId(null);
+      setProjectMessage("Project imported. The source texture is restored when it was included in the project.");
+      setStage("workspace");
+    } catch (error) {
+      setProjectMessage(error instanceof Error ? error.message : "This project could not be imported.");
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  function removeSelectedWall() {
+    if (!document || !selectedWallId) return;
+    const next = removeDocumentWall(document, activeLevel, selectedWallId);
+    setDocument(next);
+    setStructures(documentStructures(next));
+    setSelectedWallId(null);
+    setProjectMessage("Wall removed and the space marked open. Undo is available.");
+  }
+
+  function undoEdit() {
+    if (!document) return;
+    const next = undoLastDocumentEdit(document);
+    setDocument(next);
+    setStructures(documentStructures(next));
+    setProjectMessage("Last structural edit undone.");
+  }
+
+  function alignStairs() {
+    if (!document) return;
+    const next = realignDocumentStairs(document);
+    setDocument(next);
+    setStructures(documentStructures(next));
+    setProjectMessage("Stair shafts aligned across adjacent floors.");
+  }
+
+  function confirmLevel() {
+    if (!document) return;
+    const now = new Date().toISOString();
+    setDocument({
+      ...document,
+      updatedAt: now,
+      levels: document.levels.map((level) => level.id === activeLevel ? { ...level, confirmed: true } : level),
+      issues: document.issues.map((issue) => (
+        issue.levelId === activeLevel || issue.code === "floor-order" ? { ...issue, resolved: true } : issue
+      )),
+    });
+    setProjectMessage(`${selectedRegion.name} confirmed.`);
   }
 
   function toggleLevel(id: string) {
@@ -210,23 +309,62 @@ export default function Home() {
   }
 
   function moveLevel(id: string, offset: -1 | 1) {
-    setRegions((current) => moveRegion(current, id, offset));
+    setRegions((current) => {
+      const next = moveRegion(current, id, offset);
+      setDocument((project) => project ? {
+        ...project,
+        updatedAt: new Date().toISOString(),
+        levels: next.map((region, order) => {
+          const level = project.levels.find((candidate) => candidate.id === region.id)!;
+          return { ...level, order, elevation: order * 3.05, name: region.name, sourceRegion: region };
+        }),
+      } : project);
+      return next;
+    });
   }
 
   function reverseLevelOrder() {
-    setRegions((current) => resequenceRegions([...current].reverse()));
+    setRegions((current) => {
+      const next = resequenceRegions([...current].reverse());
+      setDocument((project) => project ? {
+        ...project,
+        updatedAt: new Date().toISOString(),
+        levels: next.map((region, order) => {
+          const level = project.levels.find((candidate) => candidate.id === region.id)!;
+          return { ...level, order, elevation: order * 3.05, name: region.name, sourceRegion: region };
+        }),
+      } : project);
+      return next;
+    });
   }
 
   function renameLevel(id: string, name: string) {
     setRegions((current) => current.map((region) => (
       region.id === id ? { ...region, name, nameEdited: true } : region
     )));
+    setDocument((project) => project ? {
+      ...project,
+      updatedAt: new Date().toISOString(),
+      levels: project.levels.map((level) => level.id === id ? {
+        ...level,
+        name,
+        sourceRegion: { ...level.sourceRegion, name, nameEdited: true },
+      } : level),
+    } : project);
   }
 
   function resizeLevelBoundary(id: string, amount: number) {
     setRegions((current) => current.map((region) => (
       region.id === id ? resizeRegion(region, amount) : region
     )));
+    setDocument((project) => project ? {
+      ...project,
+      updatedAt: new Date().toISOString(),
+      levels: project.levels.map((level) => level.id === id ? {
+        ...level,
+        sourceRegion: resizeRegion(level.sourceRegion, amount),
+      } : level),
+    } : project);
   }
 
   function toggleOutdoorArea(id: string, included: boolean) {
@@ -235,6 +373,14 @@ export default function Home() {
       const next = { ...region, hasOutdoorArea: included };
       return included && !region.hasOutdoorArea ? resizeRegion(next, 0.035) : next;
     }));
+    setDocument((project) => project ? {
+      ...project,
+      updatedAt: new Date().toISOString(),
+      levels: project.levels.map((level) => level.id === id ? {
+        ...level,
+        sourceRegion: { ...level.sourceRegion, hasOutdoorArea: included },
+      } : level),
+    } : project);
   }
 
   if (stage === "analyzing") return <AnalysisScreen step={analysisStep} />;
@@ -243,27 +389,35 @@ export default function Home() {
     return (
       <Workspace
         activeLevel={activeLevel}
+        alignStairs={alignStairs}
         analysisSize={analysisSize}
+        confirmLevel={confirmLevel}
+        document={document}
         exploded={exploded}
         imageUrl={imageUrl}
         mobilePanel={mobilePanel}
         moveLevel={moveLevel}
         previewLevels={previewLevels}
+        projectMessage={projectMessage}
         regions={regions}
         renameLevel={renameLevel}
         resizeLevelBoundary={resizeLevelBoundary}
         reverseLevelOrder={reverseLevelOrder}
+        removeSelectedWall={removeSelectedWall}
         selectedLevel={selectedLevel}
         selectedRegion={selectedRegion}
+        selectedWallId={selectedWallId}
         structures={structures}
         setActiveLevel={setActiveLevel}
         setExploded={setExploded}
         setMobilePanel={setMobilePanel}
+        setSelectedWallId={setSelectedWallId}
         setStage={setStage}
         setViewMode={setViewMode}
         setWallOpacity={setWallOpacity}
         toggleLevel={toggleLevel}
         toggleOutdoorArea={toggleOutdoorArea}
+        undoEdit={undoEdit}
         viewMode={viewMode}
         visibleLevels={visibleLevels}
         wallOpacity={wallOpacity}
@@ -290,10 +444,11 @@ export default function Home() {
           </p>
 
           <div className="upload-panel">
+            <input ref={projectInputRef} type="file" accept="application/json,.json" onChange={importProject} className="visually-hidden" />
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,.pdf,.svg,.dxf,.dwg"
+              accept="image/jpeg,image/png,image/webp"
               onChange={chooseFile}
               className="visually-hidden"
             />
@@ -302,7 +457,7 @@ export default function Home() {
                 <span className="upload-icon"><ImageUp size={24} /></span>
                 <span className="drop-copy">
                   <strong>Upload your floorplan</strong>
-                  <small>JPG, PNG, PDF, SVG or CAD file</small>
+                  <small>JPG, PNG or WebP · up to 20 MB</small>
                 </span>
                 <span className="browse-label">Choose file</span>
               </button>
@@ -320,7 +475,11 @@ export default function Home() {
             <button className="sample-action" onClick={() => analyze(true)}>
               Explore the sample residence
             </button>
-            <p className="privacy-note"><ShieldCheck size={13} /> Private project by default. You control retention.</p>
+            <button className="sample-action import-project-action" onClick={() => projectInputRef.current?.click()}>
+              <Upload size={13} /> Import a V2 project
+            </button>
+            {projectMessage && <p className="project-message">{projectMessage}</p>}
+            <p className="privacy-note"><ShieldCheck size={13} /> Analysis and project storage stay on this device.</p>
           </div>
         </div>
 
@@ -344,64 +503,84 @@ export default function Home() {
 
 function Workspace({
   activeLevel,
+  alignStairs,
   analysisSize,
+  confirmLevel,
+  document,
   exploded,
   imageUrl,
   mobilePanel,
   moveLevel,
   previewLevels,
+  projectMessage,
   regions,
   renameLevel,
   resizeLevelBoundary,
   reverseLevelOrder,
+  removeSelectedWall,
   selectedLevel,
   selectedRegion,
+  selectedWallId,
   structures,
   setActiveLevel,
   setExploded,
   setMobilePanel,
+  setSelectedWallId,
   setStage,
   setViewMode,
   setWallOpacity,
   toggleLevel,
   toggleOutdoorArea,
+  undoEdit,
   viewMode,
   visibleLevels,
   wallOpacity,
 }: {
   activeLevel: string;
+  alignStairs: () => void;
   analysisSize: AnalysisSize | null;
+  confirmLevel: () => void;
+  document: FloorplanDocumentV2 | null;
   exploded: boolean;
   imageUrl: string | null;
   mobilePanel: "levels" | "canvas" | "details";
   moveLevel: (id: string, offset: -1 | 1) => void;
   previewLevels: Level[];
+  projectMessage: string | null;
   regions: SourceRegion[];
   renameLevel: (id: string, name: string) => void;
   resizeLevelBoundary: (id: string, amount: number) => void;
   reverseLevelOrder: () => void;
+  removeSelectedWall: () => void;
   selectedLevel: Level;
   selectedRegion: SourceRegion;
+  selectedWallId: string | null;
   structures: StructureMap;
   setActiveLevel: (id: string) => void;
   setExploded: (value: boolean) => void;
   setMobilePanel: (panel: "levels" | "canvas" | "details") => void;
+  setSelectedWallId: (id: string | null) => void;
   setStage: (stage: AppStage) => void;
   setViewMode: (mode: ViewMode) => void;
   setWallOpacity: (opacity: number) => void;
   toggleLevel: (id: string) => void;
   toggleOutdoorArea: (id: string, included: boolean) => void;
+  undoEdit: () => void;
   viewMode: ViewMode;
   visibleLevels: Set<string>;
   wallOpacity: number;
 }) {
+  const selectedWall = structures[activeLevel]?.walls.find((wall) => wall.id === selectedWallId) ?? null;
+  const levelIssues = document?.issues.filter((issue) => !issue.levelId || issue.levelId === activeLevel) ?? [];
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
         <button className="back-button" onClick={() => setStage("welcome")} aria-label="Back to upload"><ChevronLeft size={20} /></button>
         <Brand compact />
-        <div className="project-name"><span>Project</span><strong>Sample residence</strong></div>
+        <div className="project-name"><span>V2 project</span><strong>{document?.name ?? "Sample residence"}</strong></div>
         <div className="workspace-status"><span className="saved-dot" />Saved on this device</div>
+        {document && <button className="header-tool" onClick={() => downloadProject(document)}><Download size={16} /><span>Export</span></button>}
+        {document?.edits.length ? <button className="icon-button" onClick={undoEdit} aria-label="Undo last structural edit"><Undo2 size={18} /></button> : null}
         <button className="icon-button" aria-label="Project options"><MoreHorizontal size={20} /></button>
       </header>
 
@@ -488,7 +667,9 @@ function Workspace({
                 structures={structures}
                 analysisSize={analysisSize}
                 activeLevel={activeLevel}
+                selectedWallId={selectedWallId}
                 setActiveLevel={setActiveLevel}
+                setSelectedWallId={setSelectedWallId}
               />
             ) : (
               <Suspense fallback={<div className="viewer-loading"><Box size={22} /><span>Building the 3D twin…</span></div>}>
@@ -522,6 +703,49 @@ function Workspace({
           </div>
 
           <div className="progress-row"><span><i className="complete" /><i className="complete" /><i className="complete" /><i /></span><em>3 of 4 checks</em></div>
+
+          {projectMessage && <div className="project-message workspace-message">{projectMessage}</div>}
+
+          {document && (
+            <div className="detail-section v2-runtime-card">
+              <span className="detail-label">V2 reconstruction</span>
+              <strong>Editable hybrid structure</strong>
+              <p>{document.model.runtime === "geometry-fallback" ? "Geometry and topology fallback active. Semantic model output will use this same review document." : `${document.model.runtime.toUpperCase()} semantic model active.`}</p>
+              <button className="inline-action" onClick={alignStairs}><ArrowUpDown size={14} /> Align shared stair shaft</button>
+            </div>
+          )}
+
+          {document && !selectedWall && (
+            <div className="detail-section wall-review-list">
+              <span className="detail-label">Wall review</span>
+              <p>Select any detected boundary to inspect or mark it as open space.</p>
+              <div>
+                {(structures[activeLevel]?.walls ?? []).map((wall, index) => (
+                  <button key={wall.id} onClick={() => setSelectedWallId(wall.id)}>
+                    <span>{index + 1}</span>
+                    <strong>{wall.axis === "horizontal" ? "Horizontal" : "Vertical"} wall</strong>
+                    <em>{Math.round(wall.confidence * 100)}%</em>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedWall && (
+            <div className="detail-section selected-wall-card">
+              <span className="detail-label">Selected boundary</span>
+              <strong>{selectedWall.axis === "horizontal" ? "Horizontal" : "Vertical"} wall · {Math.round(selectedWall.confidence * 100)}% evidence</strong>
+              <p>If this line is furniture, a dimension, or an open boundary, mark it as open. The original proposal remains in edit history.</p>
+              <button className="danger-action" onClick={removeSelectedWall}><Trash2 size={14} /> Mark as open space</button>
+            </div>
+          )}
+
+          {levelIssues.length > 0 && (
+            <div className="detail-section issue-list">
+              <span className="detail-label">Review queue</span>
+              {levelIssues.slice(0, 4).map((issue) => <p key={issue.id}>{issue.message}</p>)}
+            </div>
+          )}
 
           <div className="detail-section correction-section">
             <span className="detail-label">Level identity</span>
@@ -571,7 +795,7 @@ function Workspace({
           </div>
 
           <div className="detail-footer">
-            <button className="primary-action">Confirm this level <ArrowRight size={17} /></button>
+            <button className="primary-action" onClick={confirmLevel}>Confirm this level <ArrowRight size={17} /></button>
             <p>{selectedLevel.source === "detected" ? "Blue = walls · amber = openings · purple = stairs · green = balcony or terrace. Source-plan details remain visible on the 3D floor." : "The sample demonstrates the review flow with prepared geometry."}</p>
           </div>
         </aside>
@@ -592,14 +816,18 @@ function PlanReview({
   structures,
   analysisSize,
   activeLevel,
+  selectedWallId,
   setActiveLevel,
+  setSelectedWallId,
 }: {
   imageUrl: string | null;
   regions: SourceRegion[];
   structures: StructureMap;
   analysisSize: AnalysisSize | null;
   activeLevel: string;
+  selectedWallId: string | null;
   setActiveLevel: (id: string) => void;
+  setSelectedWallId: (id: string | null) => void;
 }) {
   return (
     <div className={`plan-review ${imageUrl ? "has-image" : "sample-review"}`}>
@@ -634,7 +862,23 @@ function PlanReview({
             </g>
           )) ?? [])}
           {regions.flatMap((region) => structures[region.id]?.walls.map((wall) => (
-            <g key={`${region.id}-${wall.id}`} className={activeLevel === region.id ? "active" : ""}>
+            <g
+              key={`${region.id}-${wall.id}`}
+              className={`${activeLevel === region.id ? "active" : ""} ${activeLevel === region.id && selectedWallId === wall.id ? "selected" : ""}`}
+            >
+              <line
+                className="detected-wall-hit"
+                x1={wall.start[0]}
+                y1={wall.start[1]}
+                x2={wall.end[0]}
+                y2={wall.end[1]}
+                strokeWidth={Math.max(14, wall.thickness * 1.8)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActiveLevel(region.id);
+                  setSelectedWallId(wall.id);
+                }}
+              />
               <line
                 className="detected-wall-halo"
                 x1={wall.start[0]}

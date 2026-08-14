@@ -723,6 +723,108 @@ function buildWalls(
   return walls;
 }
 
+/**
+ * Browser resampling can inflate a one-pixel dimension line until the early
+ * run detector merges it with a genuine wall. Validate the final wall's
+ * perpendicular thickness and trim only a single unsupported interior tail.
+ * Exterior walls and walls containing openings are intentionally untouched.
+ */
+function trimUnsupportedInteriorWallTails(
+  walls: DetectedWall[],
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  minimumRun: number,
+  footprint: Bounds,
+) {
+  return walls.map((wall) => {
+    const from = wall.axis === "horizontal" ? wall.start[0] : wall.start[1];
+    const to = wall.axis === "horizontal" ? wall.end[0] : wall.end[1];
+    const line = wall.axis === "horizontal" ? wall.start[1] : wall.start[0];
+    const footprintStart = wall.axis === "horizontal" ? footprint.minY : footprint.minX;
+    const footprintEnd = wall.axis === "horizontal" ? footprint.maxY : footprint.maxX;
+    const length = to - from + 1;
+    const exteriorTolerance = Math.max(5, wall.thickness * 1.5);
+    if (
+      wall.openings.length
+      || wall.thickness < 4
+      || length < minimumRun * 5
+      || Math.min(Math.abs(line - footprintStart), Math.abs(line - footprintEnd)) <= exteriorTolerance
+    ) return wall;
+
+    const radius = Math.max(4, Math.ceil(wall.thickness));
+    const crossSections: number[] = [];
+    for (let coordinate = Math.floor(from); coordinate <= Math.ceil(to); coordinate += 1) {
+      crossSections.push(longestPerpendicularRun(mask, width, height, wall.axis, coordinate, line, radius));
+    }
+    const ranked = [...crossSections].sort((a, b) => a - b);
+    const baseline = ranked[Math.floor((ranked.length - 1) * 0.88)] ?? 0;
+    if (baseline < 4) return wall;
+
+    // Use the reconstructed wall thickness as the ceiling. Intersections and
+    // text glyphs can dominate a high percentile even when the sustained wall
+    // body is consistently four pixels thick.
+    const minimumCrossSection = Math.max(3, Math.min(Math.ceil(wall.thickness), Math.ceil(baseline * 0.78)));
+    const gapTolerance = Math.max(1, Math.round(wall.thickness * 0.35));
+    const runs: Array<{ from: number; to: number }> = [];
+    let runStart = -1;
+    let lastSupported = -1;
+    let gap = 0;
+    const flush = () => {
+      if (runStart < 0 || lastSupported - runStart + 1 < Math.max(8, minimumRun, wall.thickness * 1.6)) return;
+      runs.push({ from: runStart, to: lastSupported });
+    };
+
+    crossSections.forEach((crossSection, index) => {
+      if (crossSection >= minimumCrossSection) {
+        if (runStart < 0) runStart = index;
+        lastSupported = index;
+        gap = 0;
+      } else if (runStart >= 0) {
+        gap += 1;
+        if (gap > gapTolerance) {
+          flush();
+          runStart = -1;
+          lastSupported = -1;
+          gap = 0;
+        }
+      }
+    });
+    flush();
+    if (runs.length !== 1) return wall;
+
+    const supported = runs[0];
+    const supportedFrom = from + supported.from;
+    const supportedTo = from + supported.to;
+    const edgeTolerance = Math.max(4, wall.thickness * 1.4);
+    const touchesStart = supportedFrom <= from + edgeTolerance;
+    const touchesEnd = supportedTo >= to - edgeTolerance;
+    const trimmedLength = length - (supportedTo - supportedFrom + 1);
+    if (touchesStart === touchesEnd || trimmedLength < Math.max(minimumRun * 2, length * 0.25)) return wall;
+
+    // The retained end must terminate at a perpendicular wall. This prevents
+    // trimming a legitimate wall merely because one half is drawn more faintly.
+    const retainedJoint = touchesStart ? supportedTo : supportedFrom;
+    const hasPerpendicularJoint = walls.some((candidate) => candidate !== wall && candidate.axis !== wall.axis && (
+      wall.axis === "horizontal"
+        ? Math.abs(candidate.start[0] - retainedJoint) <= edgeTolerance
+          && candidate.start[1] <= line + edgeTolerance
+          && candidate.end[1] >= line - edgeTolerance
+        : Math.abs(candidate.start[1] - retainedJoint) <= edgeTolerance
+          && candidate.start[0] <= line + edgeTolerance
+          && candidate.end[0] >= line - edgeTolerance
+    ));
+    if (!hasPerpendicularJoint) return wall;
+
+    return {
+      ...wall,
+      start: wall.axis === "horizontal" ? [supportedFrom, line] : [line, supportedFrom],
+      end: wall.axis === "horizontal" ? [supportedTo, line] : [line, supportedTo],
+      confidence: Math.min(wall.confidence, 0.86),
+    };
+  });
+}
+
 function recoverEmbeddedOpenings(
   walls: DetectedWall[],
   strongMask: Uint8Array,
@@ -1302,7 +1404,7 @@ export function inspectStructureEvidence(
     && segment.thickness <= minimumDimension * 0.095
   ));
   const structural = structuralSegments(wallSegments, minimumDimension, wallThickness);
-  return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension };
+  return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension, minimumRun };
 }
 
 export function detectFloorStructure(
@@ -1311,12 +1413,19 @@ export function detectFloorStructure(
   height: number,
   region: SourceRegion,
 ): DetectedStructure {
-  const { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
+  const { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension, minimumRun } = inspectStructureEvidence(pixels, width, height, region);
   const thickCore = structural.filter((segment) => segment.thickness >= wallThickness * 0.62 || segment.to - segment.from >= minimumDimension * 0.3);
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
   const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
   const walls = recoverEmbeddedOpenings(
-    buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
+    trimUnsupportedInteriorWallTails(
+      buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
+      strongMask,
+      width,
+      height,
+      minimumRun,
+      footprintBounds,
+    ),
     strongMask,
     mediumMask,
     windowMask,

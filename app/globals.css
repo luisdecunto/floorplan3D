@@ -340,6 +340,23 @@ select:focus-visible {
   text-underline-offset: 3px;
 }
 
+.import-project-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.project-message {
+  margin: 10px 0 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--blue);
+  background: #eef2ff;
+  color: #40517f;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .privacy-note {
   margin: 11px 0 0;
   display: flex;
@@ -654,6 +671,18 @@ select:focus-visible {
 .project-name span { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
 .project-name strong { font-size: 13px; }
 .workspace-status { margin-left: auto; background: transparent; border: 0; }
+.header-tool {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
 
 .workspace-grid {
   height: calc(100vh - 62px);
@@ -873,6 +902,10 @@ select:focus-visible {
 .structure-overlay g.active { opacity: 0.88; }
 .detected-wall-halo { stroke: rgba(255, 254, 250, 0.96); stroke-linecap: square; fill: none; }
 .detected-wall { stroke: #2457df; stroke-linecap: square; fill: none; }
+.detected-wall-hit { stroke: transparent; fill: none; pointer-events: stroke; cursor: pointer; }
+.structure-overlay g.selected { opacity: 1; }
+.structure-overlay g.selected .detected-wall-halo { stroke: var(--acid); stroke-width: 14px; }
+.structure-overlay g.selected .detected-wall { stroke: #142c84; }
 .detected-opening { stroke: #f2a51a; stroke-linecap: butt; }
 .detected-opening.window { stroke: #36a5bc; }
 .detected-outdoor {
@@ -1019,6 +1052,52 @@ select:focus-visible {
 .progress-row i.complete { background: var(--blue); }
 .progress-row em { font-size: 9px; color: var(--muted); font-style: normal; }
 .detail-section { padding: 0 0 19px; margin-bottom: 19px; border-bottom: 1px solid var(--line); }
+.workspace-message { margin: -8px 0 18px; }
+.v2-runtime-card,
+.selected-wall-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--white);
+}
+.v2-runtime-card strong,
+.selected-wall-card strong { display: block; font-size: 10px; line-height: 1.4; }
+.v2-runtime-card p,
+.selected-wall-card p,
+.issue-list p { margin: 6px 0 10px; font-size: 9px; line-height: 1.45; color: var(--muted); }
+.inline-action,
+.danger-action {
+  min-height: 34px;
+  width: 100%;
+  padding: 0 9px;
+  border: 1px solid #bcbdb5;
+  background: #f6f5ef;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.danger-action { border-color: #c65c43; color: #9e321d; background: #fff3ef; }
+.issue-list p { padding: 8px; margin: 0 0 6px; border-left: 2px solid #d5ad33; background: #fff9e9; }
+.wall-review-list > p { margin: 0 0 9px; font-size: 9px; line-height: 1.4; color: var(--muted); }
+.wall-review-list > div { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.wall-review-list button {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 5px;
+  text-align: left;
+  cursor: pointer;
+}
+.wall-review-list button > span { width: 17px; height: 17px; display: grid; place-items: center; background: #e8edff; color: var(--blue); font-size: 8px; font-weight: 850; }
+.wall-review-list button strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 8px; }
+.wall-review-list button em { font-size: 8px; font-style: normal; color: var(--muted); }
 .correction-section { display: flex; flex-direction: column; gap: 11px; }
 .level-name-field { display: flex; flex-direction: column; gap: 6px; }
 .level-name-field > span { font-size: 9px; color: var(--muted); }
@@ -1109,6 +1188,7 @@ select:focus-visible {
   .desktop-only { display: none !important; }
   .marketing-header { height: 62px; padding: 0 18px; }
   .prototype-pill { display: none; }
+  .header-tool span { display: none; }
   .welcome-shell { background-size: auto, 28px 28px, 28px 28px, auto; }
   .hero-grid { width: calc(100% - 32px); padding: 42px 0 34px; min-height: 0; }
   .hero-copy h1 { font-size: clamp(52px, 15vw, 76px); }

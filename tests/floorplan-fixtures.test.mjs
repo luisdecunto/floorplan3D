@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { detectPlanRegions } from "../app/plan-regions.ts";
 import { alignAdjacentStairStructures, detectFloorStructures } from "../app/structure-detector.ts";
+import { suggestBuildingOrder } from "../app/floorplan-document.ts";
 
 const fixtureDirectory = new URL("./fixtures/floorplans/", import.meta.url);
 const manifestUrl = new URL("manifest.json", fixtureDirectory);
@@ -87,6 +88,17 @@ if (!manifest) {
         assert.equal(bottomPlan.stairs.length, 1, "ground-floor stair symbol should be retained");
         assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
         assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
+        const fakeOpenSpaceDivider = topPlan.walls.find((wall) => (
+          wall.axis === "horizontal"
+          && wall.start[1] > topPlan.footprint.y + topPlan.footprint.height * 0.35
+          && wall.start[1] < topPlan.footprint.y + topPlan.footprint.height * 0.75
+          && wall.start[0] < topPlan.footprint.x + topPlan.footprint.width * 0.45
+          && wall.end[0] > topPlan.footprint.x + topPlan.footprint.width * 0.82
+        ));
+        assert.equal(fakeOpenSpaceDivider, undefined, "the Stue/Køkken open space must not receive a virtual wall");
+        const suggested = suggestBuildingOrder(regions, structures);
+        assert.equal(suggested[0].id, regions[1].id, "the enclosed lower plan should be proposed as ground floor");
+        assert.equal(suggested[1].id, regions[0].id, "the balcony plan should be proposed as first floor");
         const aligned = alignAdjacentStairStructures([regions[1], regions[0]], structures);
         const alignedBottom = aligned[regions[1].id].stairs[0];
         const topStair = topPlan.stairs[0];
