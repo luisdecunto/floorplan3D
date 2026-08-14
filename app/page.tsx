@@ -636,6 +636,14 @@ function PlanReview({
           {regions.flatMap((region) => structures[region.id]?.walls.map((wall) => (
             <g key={`${region.id}-${wall.id}`} className={activeLevel === region.id ? "active" : ""}>
               <line
+                className="detected-wall-halo"
+                x1={wall.start[0]}
+                y1={wall.start[1]}
+                x2={wall.end[0]}
+                y2={wall.end[1]}
+                strokeWidth={Math.max(4, wall.thickness * 1.05)}
+              />
+              <line
                 className="detected-wall"
                 x1={wall.start[0]}
                 y1={wall.start[1]}

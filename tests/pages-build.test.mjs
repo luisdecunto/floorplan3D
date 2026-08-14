@@ -22,3 +22,13 @@ test("GitHub Pages artifact contains only deployable static assets", async () =>
   assert.ok(!entries.includes("fixtures"));
   await access(new URL("og.png", outputDirectory));
 });
+
+test("plan review visually separates detected walls from source annotations", async () => {
+  const assetDirectory = new URL("assets/", outputDirectory);
+  const stylesheet = (await readdir(assetDirectory)).find((entry) => entry.endsWith(".css"));
+  assert.ok(stylesheet, "expected the production stylesheet");
+  const css = await readFile(new URL(stylesheet, assetDirectory), "utf8");
+
+  assert.match(css, /\.detected-wall-halo/);
+  assert.match(css, /\.region-box\{[^}]*background:(?:transparent|0 0)/);
+});
