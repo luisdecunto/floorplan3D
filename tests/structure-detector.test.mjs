@@ -76,7 +76,7 @@ test("detected pixel geometry is converted into a non-sample 3D level", () => {
   assert.ok(footprint.centerZ > level.slab.z, "viewer framing should include the exterior platform");
 });
 
-test("stairs connect adjacent floors once and terminate in an upper slab opening", () => {
+test("half-paced stairs use opposing flights, a half-height landing and an upper slab opening", () => {
   const base = {
     shortName: "GF",
     ceilingHeight: 2.7,
@@ -106,8 +106,20 @@ test("stairs connect adjacent floors once and terminate in an upper slab opening
   assert.equal(connections.length, 1);
   assert.equal(connections[0].lowerLevelId, "lower");
   assert.equal(connections[0].upperLevelId, "upper");
-  assert.ok(connections[0].start[0] > connections[0].end[0], "flight should move from the right-hand start to the left-hand arrival");
-  assert.ok(connections[0].toElevation > 3 && connections[0].toElevation < 3.1);
+  assert.ok(connections[0].lowerFlight.start[0] > connections[0].upperFlight.end[0], "lower flight should start on the right and arrive on the left");
+  const lowerVector = [
+    connections[0].lowerFlight.end[0] - connections[0].lowerFlight.start[0],
+    connections[0].lowerFlight.end[1] - connections[0].lowerFlight.start[1],
+  ];
+  const upperVector = [
+    connections[0].upperFlight.end[0] - connections[0].upperFlight.start[0],
+    connections[0].upperFlight.end[1] - connections[0].upperFlight.start[1],
+  ];
+  assert.ok(lowerVector[0] * upperVector[0] + lowerVector[1] * upperVector[1] < 0, "the two flights should run in opposite directions");
+  assert.equal(connections[0].lowerFlight.toElevation, connections[0].landing.elevation);
+  assert.equal(connections[0].upperFlight.fromElevation, connections[0].landing.elevation);
+  assert.ok(connections[0].landing.elevation > 1.5 && connections[0].landing.elevation < 1.65);
+  assert.ok(connections[0].upperFlight.toElevation > 3 && connections[0].upperFlight.toElevation < 3.1);
 
   const opening = stairwellOpening(upper);
   assert.ok(opening);

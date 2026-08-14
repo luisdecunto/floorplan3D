@@ -150,26 +150,47 @@ function StairwellTrim({ opening, elevation }: { opening: StairwellOpening; elev
 }
 
 function StairConnectionModel({ connection }: { connection: StairConnection }) {
-  const dx = connection.end[0] - connection.start[0];
-  const dz = connection.end[1] - connection.start[1];
-  const runLength = Math.max(0.5, Math.hypot(dx, dz));
-  const angle = Math.atan2(dz, dx);
-  const tread = runLength / connection.stepCount;
-  const rise = connection.toElevation - connection.fromElevation;
   return (
     <group>
-      {Array.from({ length: connection.stepCount }, (_, index) => {
-        const progress = (index + 0.5) / connection.stepCount;
-        const height = ((index + 1) / connection.stepCount) * rise;
+      <StairFlightModel flight={connection.lowerFlight} width={connection.width} colorOffset={0} />
+      <mesh position={[connection.landing.x, connection.landing.elevation - 0.08, connection.landing.z]} castShadow receiveShadow>
+        <boxGeometry args={[connection.landing.width, 0.16, connection.landing.depth]} />
+        <meshStandardMaterial color="#bd8b52" roughness={0.82} />
+      </mesh>
+      <StairFlightModel flight={connection.upperFlight} width={connection.width} colorOffset={1} />
+    </group>
+  );
+}
+
+function StairFlightModel({
+  flight,
+  width,
+  colorOffset,
+}: {
+  flight: StairConnection["lowerFlight"];
+  width: number;
+  colorOffset: number;
+}) {
+  const dx = flight.end[0] - flight.start[0];
+  const dz = flight.end[1] - flight.start[1];
+  const runLength = Math.max(0.5, Math.hypot(dx, dz));
+  const angle = Math.atan2(dz, dx);
+  const tread = runLength / flight.stepCount;
+  const rise = flight.toElevation - flight.fromElevation;
+  return (
+    <group>
+      {Array.from({ length: flight.stepCount }, (_, index) => {
+        const progress = (index + 0.5) / flight.stepCount;
+        const height = ((index + 1) / flight.stepCount) * rise;
         const position: [number, number, number] = [
-          connection.start[0] + dx * progress,
-          connection.fromElevation + height / 2,
-          connection.start[1] + dz * progress,
+          flight.start[0] + dx * progress,
+          flight.fromElevation + height / 2,
+          flight.start[1] + dz * progress,
         ];
         return (
           <mesh key={index} position={position} rotation={[0, -angle, 0]} castShadow receiveShadow>
-            <boxGeometry args={[tread * 1.06, height, connection.width]} />
-            <meshStandardMaterial color={index % 2 ? "#c79a61" : "#d6ad78"} roughness={0.8} />
+            <boxGeometry args={[tread * 1.06, height, width]} />
+            <meshStandardMaterial color={(index + colorOffset) % 2 ? "#c79a61" : "#d6ad78"} roughness={0.8} />
           </mesh>
         );
       })}
@@ -216,12 +237,27 @@ function OutdoorAreaModel({ area, elevation }: { area: OutdoorArea; elevation: n
   if (area.side !== "right") addVertical("rail-left", area.x - area.width / 2);
   if (area.side !== "left") addVertical("rail-right", area.x + area.width / 2);
   const plankCount = Math.max(4, Math.min(18, Math.ceil(area.width / 0.55)));
+  const outerEdge = area.side === "bottom"
+    ? { position: [area.x, elevation - 0.15, area.z + area.depth / 2] as [number, number, number], size: [area.width, 0.3, 0.12] as [number, number, number] }
+    : area.side === "top"
+      ? { position: [area.x, elevation - 0.15, area.z - area.depth / 2] as [number, number, number], size: [area.width, 0.3, 0.12] as [number, number, number] }
+      : area.side === "right"
+        ? { position: [area.x + area.width / 2, elevation - 0.15, area.z] as [number, number, number], size: [0.12, 0.3, area.depth] as [number, number, number] }
+        : { position: [area.x - area.width / 2, elevation - 0.15, area.z] as [number, number, number], size: [0.12, 0.3, area.depth] as [number, number, number] };
+  const supportHeight = Math.max(0, elevation - 0.12);
+  const supportPoints: Array<[number, number]> = area.side === "top" || area.side === "bottom"
+    ? [[area.x - area.width * 0.43, outerEdge.position[2]], [area.x + area.width * 0.43, outerEdge.position[2]]]
+    : [[outerEdge.position[0], area.z - area.depth * 0.43], [outerEdge.position[0], area.z + area.depth * 0.43]];
 
   return (
     <group>
       <mesh position={[area.x, elevation - 0.035, area.z]} receiveShadow castShadow>
-        <boxGeometry args={[area.width, 0.16, area.depth]} />
-        <meshStandardMaterial color="#a96f36" roughness={0.9} />
+        <boxGeometry args={[area.width, 0.22, area.depth]} />
+        <meshStandardMaterial color="#a96f36" emissive="#351702" emissiveIntensity={0.12} roughness={0.9} />
+      </mesh>
+      <mesh position={outerEdge.position} castShadow receiveShadow>
+        <boxGeometry args={outerEdge.size} />
+        <meshStandardMaterial color="#6b4528" roughness={0.86} />
       </mesh>
       {Array.from({ length: plankCount }, (_, index) => (
         <mesh key={`plank-${index}`} position={[area.x - area.width / 2 + area.width * (index + 0.5) / plankCount, elevation + 0.052, area.z]} receiveShadow>
@@ -245,6 +281,12 @@ function OutdoorAreaModel({ area, elevation }: { area: OutdoorArea; elevation: n
         <mesh key={post.key} position={post.position} castShadow>
           <boxGeometry args={[railThickness, railHeight, railThickness]} />
           <meshStandardMaterial color="#36413f" roughness={0.56} metalness={0.28} />
+        </mesh>
+      ))}
+      {supportHeight > 0.4 && supportPoints.map(([x, z], index) => (
+        <mesh key={`balcony-support-${index}`} position={[x, supportHeight / 2, z]} castShadow receiveShadow>
+          <boxGeometry args={[0.18, supportHeight, 0.18]} />
+          <meshStandardMaterial color="#515856" roughness={0.7} metalness={0.12} />
         </mesh>
       ))}
     </group>
