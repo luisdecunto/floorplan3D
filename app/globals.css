@@ -871,6 +871,7 @@ select:focus-visible {
 
 .structure-overlay g { opacity: 0.34; transition: opacity 140ms ease; }
 .structure-overlay g.active { opacity: 0.88; }
+.detected-wall-halo { stroke: rgba(255, 254, 250, 0.96); stroke-linecap: square; fill: none; }
 .detected-wall { stroke: #2457df; stroke-linecap: square; fill: none; }
 .detected-opening { stroke: #f2a51a; stroke-linecap: butt; }
 .detected-opening.window { stroke: #36a5bc; }
@@ -912,12 +913,12 @@ select:focus-visible {
 .region-box {
   position: absolute;
   border: 2px solid var(--blue);
-  background: rgba(36, 87, 223, 0.05);
+  background: transparent;
   cursor: pointer;
   transition: background 140ms ease, box-shadow 140ms ease;
 }
 .region-box:hover,
-.region-box.active { background: rgba(216, 255, 85, 0.13); border-color: var(--ink); box-shadow: 0 0 0 3px var(--acid); }
+.region-box.active { background: rgba(216, 255, 85, 0.06); border-color: var(--ink); box-shadow: 0 0 0 3px var(--acid); }
 .region-box > span {
   position: absolute;
   top: -14px;
