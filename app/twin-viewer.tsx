@@ -9,6 +9,7 @@ import { SRGBColorSpace, TextureLoader } from "three";
 import {
   buildStairConnections,
   sceneFootprint,
+  slabPieceTextureUv,
   slabPieces,
   stairwellOpening,
   type SlabPiece,
@@ -108,23 +109,19 @@ function PlanFloor({ level, pieces, elevation }: { level: Level; pieces: SlabPie
 
 function PlanFloorPiece({ level, piece, elevation }: { level: Level; piece: SlabPiece; elevation: number }) {
   const loadedTexture = useLoader(TextureLoader, level.floorTextureUrl ?? "");
+  const uv = useMemo(() => new Float32Array(slabPieceTextureUv(level, piece)), [level, piece]);
   const texture = useMemo(() => {
     const copy = loadedTexture.clone();
     copy.colorSpace = SRGBColorSpace;
-    const slabLeft = level.slab.x - level.slab.width / 2;
-    const slabFront = level.slab.z + level.slab.depth / 2;
-    copy.repeat.set(piece.width / level.slab.width, piece.depth / level.slab.depth);
-    copy.offset.set(
-      (piece.x - piece.width / 2 - slabLeft) / level.slab.width,
-      (slabFront - (piece.z + piece.depth / 2)) / level.slab.depth,
-    );
     copy.needsUpdate = true;
     return copy;
-  }, [level.slab.depth, level.slab.width, level.slab.x, level.slab.z, loadedTexture, piece.depth, piece.width, piece.x, piece.z]);
+  }, [loadedTexture]);
   useEffect(() => () => texture.dispose(), [texture]);
   return (
     <mesh position={[piece.x, elevation + 0.048, piece.z]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[piece.width, piece.depth]} />
+      <planeGeometry args={[piece.width, piece.depth]}>
+        <bufferAttribute attach="attributes-uv" args={[uv, 2]} />
+      </planeGeometry>
       <meshStandardMaterial map={texture} roughness={0.95} metalness={0} />
     </mesh>
   );

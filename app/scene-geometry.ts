@@ -15,6 +15,8 @@ export type SlabPiece = {
   depth: number;
 };
 
+export type SlabPieceTextureUv = [number, number, number, number, number, number, number, number];
+
 export type StairConnection = {
   id: string;
   lowerLevelId: string;
@@ -111,6 +113,23 @@ export function slabPieces(level: Level, opening: StairwellOpening | null): Slab
   add("back", openingLeft, openingRight, back, openingBack);
   add("front", openingLeft, openingRight, openingFront, front);
   return pieces;
+}
+
+/** Maps a slab fragment directly into the single cropped floorplan image. */
+export function slabPieceTextureUv(level: Level, piece: SlabPiece): SlabPieceTextureUv {
+  const slabLeft = level.slab.x - level.slab.width / 2;
+  const slabBack = level.slab.z - level.slab.depth / 2;
+  const pieceLeft = piece.x - piece.width / 2;
+  const pieceRight = piece.x + piece.width / 2;
+  const pieceBack = piece.z - piece.depth / 2;
+  const pieceFront = piece.z + piece.depth / 2;
+  const uLeft = clamp((pieceLeft - slabLeft) / level.slab.width, 0, 1);
+  const uRight = clamp((pieceRight - slabLeft) / level.slab.width, 0, 1);
+  // PlaneGeometry's upper UV row becomes the back edge after the floor plane
+  // is rotated flat, so image-top is v=1 and image-bottom is v=0.
+  const vBack = 1 - clamp((pieceBack - slabBack) / level.slab.depth, 0, 1);
+  const vFront = 1 - clamp((pieceFront - slabBack) / level.slab.depth, 0, 1);
+  return [uLeft, vBack, uRight, vBack, uLeft, vFront, uRight, vFront];
 }
 
 function stairEnds(stair: Stair) {
