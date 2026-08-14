@@ -282,7 +282,14 @@ function maskComponents(mask: Uint8Array, width: number, height: number, bounds:
   return components;
 }
 
-function splitByStrokeSupport(segments: Segment[], mask: Uint8Array, width: number, height: number, minimumRun: number) {
+function splitByStrokeSupport(
+  segments: Segment[],
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  minimumRun: number,
+  trimSingleSupportedRun = false,
+) {
   return segments.flatMap((segment) => {
     if (segment.thickness < 3 || segment.to - segment.from < minimumRun * 1.6) return [segment];
     const radius = Math.max(1, Math.floor(segment.thickness / 2));
@@ -328,7 +335,30 @@ function splitByStrokeSupport(segments: Segment[], mask: Uint8Array, width: numb
       }
     });
     flush();
-    return pieces.length >= 2 ? pieces : [segment];
+    if (pieces.length) {
+      const supportedLength = pieces.reduce((sum, piece) => sum + piece.to - piece.from + 1, 0);
+      const originalLength = segment.to - segment.from + 1;
+      const trimmedLength = originalLength - supportedLength;
+      const lonePiece = pieces[0];
+      const attachedToOneEnd = pieces.length === 1 && (
+        (lonePiece.from <= segment.from + 2 && lonePiece.to < segment.to - 2)
+        || (lonePiece.to >= segment.to - 2 && lonePiece.from > segment.from + 2)
+      );
+      // A thick wall that meets a collinear dimension line is one connected
+      // component: the component keeps the wall's thickness but inherits the
+      // annotation's full length. Keep the one genuinely thick run when the
+      // unsupported tail is substantial instead of restoring that virtual wall.
+      if (
+        pieces.length >= 2
+        || (
+          trimSingleSupportedRun
+          && attachedToOneEnd
+          && originalLength >= minimumRun * 5
+          && trimmedLength >= Math.max(5, minimumRun * 0.45)
+        )
+      ) return pieces;
+    }
+    return [segment];
   });
 }
 
@@ -1228,15 +1258,29 @@ export function inspectStructureEvidence(
   // The oriented run must be longer than a normal wall is thick; otherwise
   // perpendicular walls join the mask into one building-sized component.
   const minimumRun = Math.max(12, Math.round(minimumDimension * 0.06));
+  const horizontalComponents = maskComponents(
+    markLongRuns(strongMask, width, height, bounds, "horizontal", minimumRun),
+    width,
+    height,
+    bounds,
+    "horizontal",
+  );
+  const verticalComponents = maskComponents(
+    markLongRuns(strongMask, width, height, bounds, "vertical", minimumRun),
+    width,
+    height,
+    bounds,
+    "vertical",
+  );
   const horizontal = splitByStrokeSupport(
-    maskComponents(markLongRuns(strongMask, width, height, bounds, "horizontal", minimumRun), width, height, bounds, "horizontal"),
+    horizontalComponents,
     strongMask,
     width,
     height,
     minimumRun,
   );
   const vertical = splitByStrokeSupport(
-    maskComponents(markLongRuns(strongMask, width, height, bounds, "vertical", minimumRun), width, height, bounds, "vertical"),
+    verticalComponents,
     strongMask,
     width,
     height,
@@ -1247,7 +1291,17 @@ export function inspectStructureEvidence(
     && segment.thickness <= minimumDimension * 0.095
   ));
   const wallThickness = clamp(weightedPercentile(rawSegments.filter((segment) => segment.to - segment.from >= minimumDimension * 0.1), 0.66), 2, minimumDimension * 0.07);
-  const structural = structuralSegments(rawSegments, minimumDimension, wallThickness);
+  // Outdoor rails and stair traces are legitimately thin and retain the raw
+  // segments. Only wall candidates trim a lone thick run away from an attached
+  // thin annotation such as a measurement line.
+  const wallSegments = mergeOverlaps([
+    ...splitByStrokeSupport(horizontalComponents, strongMask, width, height, minimumRun, true),
+    ...splitByStrokeSupport(verticalComponents, strongMask, width, height, minimumRun, true),
+  ]).filter((segment) => (
+    segment.to - segment.from >= minimumRun
+    && segment.thickness <= minimumDimension * 0.095
+  ));
+  const structural = structuralSegments(wallSegments, minimumDimension, wallThickness);
   return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension };
 }
 
