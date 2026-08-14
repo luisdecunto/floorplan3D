@@ -83,7 +83,7 @@ async function loadImage(url: string) {
   return image;
 }
 
-async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[]; structures: StructureMap; size: AnalysisSize }> {
+async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[]; structures: StructureMap; size: AnalysisSize; previewDataUrl?: string }> {
   try {
     const image = await loadImage(url);
     // Preserve thin balcony rails and stair treads. At 900 px the browser's
@@ -126,7 +126,7 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
     // retaining the explicit reverse/relabel controls for ambiguous cases.
     regions = suggestBuildingOrder(regions, structures);
     structures = alignAdjacentStairStructures(regions, structures);
-    return { regions, structures, size: { width, height } };
+    return { regions, structures, size: { width, height }, previewDataUrl: canvas.toDataURL("image/jpeg", 0.9) };
   } catch {
     const regions = [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.42 }];
     return { regions, structures: {}, size: { width: 1, height: 1 } };
@@ -217,11 +217,13 @@ export default function Home() {
     let proposedRegions = sampleRegions;
     let proposedStructures: StructureMap = {};
     let proposedSize: AnalysisSize | null = null;
+    let proposedPreviewDataUrl: string | undefined;
     if (!useSample && imageUrl) {
       const analysis = await inspectFloorplan(imageUrl);
       proposedRegions = analysis.regions;
       proposedStructures = analysis.structures;
       proposedSize = analysis.size;
+      proposedPreviewDataUrl = analysis.previewDataUrl;
     }
     await sleep(520);
     setAnalysisStep(2);
@@ -237,6 +239,7 @@ export default function Home() {
       height: proposedSize.height,
       regions: proposedRegions,
       structures: proposedStructures,
+      previewDataUrl: proposedPreviewDataUrl,
     }) : null);
     setAnalysisSize(proposedSize);
     setActiveLevel(proposedRegions[0]?.id ?? "ground");
@@ -255,6 +258,7 @@ export default function Home() {
       setDocument(imported);
       setRegions(documentRegions(imported));
       setStructures(documentStructures(imported));
+      setImageUrl(imported.source.previewDataUrl ?? null);
       setAnalysisSize({ width: imported.source.width, height: imported.source.height });
       setActiveLevel(imported.levels[0].id);
       setVisibleLevels(new Set(imported.levels.map((level) => level.id)));
@@ -272,6 +276,7 @@ export default function Home() {
     setDocument(project);
     setRegions(documentRegions(project));
     setStructures(documentStructures(project));
+    setImageUrl(project.source.previewDataUrl ?? null);
     setAnalysisSize({ width: project.source.width, height: project.source.height });
     setActiveLevel(project.levels[0].id);
     setVisibleLevels(new Set(project.levels.map((level) => level.id)));

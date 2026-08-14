@@ -63,6 +63,7 @@ export type FloorplanDocumentV2 = {
     mimeType: string;
     width: number;
     height: number;
+    previewDataUrl?: string;
   };
   levels: FloorplanLevelV2[];
   issues: ReviewIssue[];
@@ -154,6 +155,7 @@ export function createFloorplanDocumentV2({
   height,
   regions,
   structures,
+  previewDataUrl,
 }: {
   name: string;
   mimeType: string;
@@ -161,6 +163,7 @@ export function createFloorplanDocumentV2({
   height: number;
   regions: SourceRegion[];
   structures: Record<string, DetectedStructure>;
+  previewDataUrl?: string;
 }): FloorplanDocumentV2 {
   const aligned = alignAdjacentStairStructures(regions, structures);
   const now = new Date().toISOString();
@@ -182,7 +185,7 @@ export function createFloorplanDocumentV2({
     createdAt: now,
     updatedAt: now,
     model: { version: "v2-geometry-bootstrap", runtime: "geometry-fallback" },
-    source: { name, mimeType, width, height },
+    source: { name, mimeType, width, height, previewDataUrl },
     levels,
     issues: buildIssues(levels),
     edits: [],
