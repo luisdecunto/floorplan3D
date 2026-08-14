@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildStairConnections, sceneFootprint, slabPieces, stairwellOpening } from "../app/scene-geometry.ts";
 import { detectFloorStructure, structureToLevel } from "../app/structure-detector.ts";
 
 function syntheticPlan() {
@@ -64,7 +65,54 @@ test("detected pixel geometry is converted into a non-sample 3D level", () => {
   assert.equal(level.source, "detected");
   assert.equal(level.walls.length, structure.walls.length);
   assert.equal(level.outdoorAreas?.length, 1);
+  assert.ok(Math.abs(
+    level.outdoorAreas[0].z - level.outdoorAreas[0].depth / 2 - level.slab.depth / 2,
+  ) < 0.0001, "balcony should be attached to the outside slab edge");
   assert.equal(level.stairs?.length, structure.stairs.length);
   assert.equal(level.elevation, 3.05);
   assert.ok(level.walls.every((wall) => wall.thickness && wall.thickness >= 0.1));
+  const footprint = sceneFootprint([level]);
+  assert.equal(footprint.maxZ, level.outdoorAreas[0].z + level.outdoorAreas[0].depth / 2);
+  assert.ok(footprint.centerZ > level.slab.z, "viewer framing should include the exterior platform");
+});
+
+test("stairs connect adjacent floors once and terminate in an upper slab opening", () => {
+  const base = {
+    shortName: "GF",
+    ceilingHeight: 2.7,
+    area: 70,
+    roomCount: 4,
+    wallCount: 0,
+    openingCount: 0,
+    scaleStatus: "needed",
+    slab: { width: 10, depth: 8, x: 0, z: 0 },
+    walls: [],
+  };
+  const lower = {
+    ...base,
+    id: "lower",
+    name: "Ground floor",
+    elevation: 0,
+    stairs: [{ id: "lower-stair", x: 1.15, z: -2.4, width: 1.9, depth: 3.4, runAxis: "vertical", stepCount: 14, confidence: 0.82 }],
+  };
+  const upper = {
+    ...base,
+    id: "upper",
+    name: "First floor",
+    elevation: 3.05,
+    stairs: [{ id: "upper-stair", x: -0.1, z: -2.6, width: 2.1, depth: 3.2, runAxis: "vertical", stepCount: 12, confidence: 0.84 }],
+  };
+  const connections = buildStairConnections([lower, upper]);
+  assert.equal(connections.length, 1);
+  assert.equal(connections[0].lowerLevelId, "lower");
+  assert.equal(connections[0].upperLevelId, "upper");
+  assert.ok(connections[0].start[0] > connections[0].end[0], "flight should move from the right-hand start to the left-hand arrival");
+  assert.ok(connections[0].toElevation > 3 && connections[0].toElevation < 3.1);
+
+  const opening = stairwellOpening(upper);
+  assert.ok(opening);
+  const pieces = slabPieces(upper, opening);
+  assert.equal(pieces.length, 4);
+  const remainingArea = pieces.reduce((sum, piece) => sum + piece.width * piece.depth, 0);
+  assert.ok(Math.abs(remainingArea - (upper.slab.width * upper.slab.depth - opening.width * opening.depth)) < 0.0001);
 });
