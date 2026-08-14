@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { detectPlanRegions } from "../app/plan-regions.ts";
+import { detectFloorStructures } from "../app/structure-detector.ts";
 
 const fixtureDirectory = new URL("./fixtures/floorplans/", import.meta.url);
 const manifestUrl = new URL("manifest.json", fixtureDirectory);
@@ -70,6 +71,21 @@ if (!manifest) {
       const regions = detectPlanRegions(data, info.width, info.height);
 
       assert.equal(regions.length, fixture.expectedLevelCount);
+
+      const structures = detectFloorStructures(data, info.width, info.height, regions);
+      regions.forEach((region) => {
+        const structure = structures[region.id];
+        assert.ok(structure.walls.length >= 3, `${fixture.id}/${region.id} should contain a usable wall network`);
+        assert.ok(structure.walls.every((wall) => wall.start.every(Number.isFinite) && wall.end.every(Number.isFinite)));
+      });
+
+      if (fixture.id === "fp-001") {
+        const topPlan = structures[regions[0].id];
+        const bottomPlan = structures[regions[1].id];
+        assert.equal(topPlan.outdoorAreas.length, 1, "first-floor balcony should be retained");
+        assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
+        assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
+      }
     });
   }
 }

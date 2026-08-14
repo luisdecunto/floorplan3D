@@ -37,11 +37,18 @@ import {
   type SourceRegion,
 } from "./plan-regions";
 import { sampleLevels, type Level } from "./scene-data";
+import {
+  detectFloorStructures,
+  structureToLevel,
+  type DetectedStructure,
+} from "./structure-detector";
 
 const TwinViewer = lazy(() => import("./twin-viewer"));
 
 type AppStage = "welcome" | "analyzing" | "workspace";
 type ViewMode = "review" | "twin";
+type AnalysisSize = { width: number; height: number };
+type StructureMap = Record<string, DetectedStructure>;
 
 const sampleRegions: SourceRegion[] = [
   { id: "ground", name: "Ground floor", x: 0.05, y: 0.14, width: 0.42, height: 0.68, confidence: 0.96 },
@@ -59,10 +66,10 @@ async function loadImage(url: string) {
   return image;
 }
 
-async function findPlanRegions(url: string): Promise<SourceRegion[]> {
+async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[]; structures: StructureMap; size: AnalysisSize }> {
   try {
     const image = await loadImage(url);
-    const maxSide = 720;
+    const maxSide = 900;
     const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -70,17 +77,42 @@ async function findPlanRegions(url: string): Promise<SourceRegion[]> {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return [];
+    if (!context) throw new Error("Canvas is unavailable");
     context.drawImage(image, 0, 0, width, height);
     const pixels = context.getImageData(0, 0, width, height).data;
-    return detectPlanRegions(pixels, width, height);
+    let regions = detectPlanRegions(pixels, width, height);
+    const structures = detectFloorStructures(pixels, width, height, regions);
+    regions = regions.map((region) => ({
+      ...region,
+      hasOutdoorArea: structures[region.id]?.outdoorAreas.length > 0,
+      confidence: structures[region.id]
+        ? Math.min(region.confidence, structures[region.id].confidence)
+        : region.confidence,
+    }));
+
+    // A rail-enclosed exterior platform is useful ordering evidence in a
+    // two-level plan: suggest the enclosed plan below the balcony level while
+    // retaining the explicit reverse/relabel controls for ambiguous cases.
+    if (regions.length === 2) {
+      const withOutdoor = regions.filter((region) => structures[region.id]?.outdoorAreas.length);
+      if (withOutdoor.length === 1) {
+        regions = resequenceRegions([
+          ...regions.filter((region) => region.id !== withOutdoor[0].id),
+          withOutdoor[0],
+        ]);
+      }
+    }
+    return { regions, structures, size: { width, height } };
   } catch {
-    return [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.52 }];
+    const regions = [{ id: "ground", name: "Floor 1", x: 0.03, y: 0.03, width: 0.94, height: 0.94, confidence: 0.42 }];
+    return { regions, structures: {}, size: { width: 1, height: 1 } };
   }
 }
 
-function buildPreviewLevels(regions: SourceRegion[]): Level[] {
+function buildPreviewLevels(regions: SourceRegion[], structures: StructureMap): Level[] {
   return regions.map((region, index) => {
+    const detected = structures[region.id];
+    if (detected?.walls.length >= 3) return structureToLevel(detected, region, index);
     const template = sampleLevels[Math.min(index, sampleLevels.length - 1)];
     return {
       ...template,
@@ -88,6 +120,7 @@ function buildPreviewLevels(regions: SourceRegion[]): Level[] {
       name: region.name,
       shortName: index === 0 ? "BASE" : `${index}F`,
       elevation: index * 3.05,
+      detectionConfidence: region.confidence,
     };
   });
 }
@@ -98,6 +131,8 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [regions, setRegions] = useState<SourceRegion[]>(sampleRegions);
+  const [structures, setStructures] = useState<StructureMap>({});
+  const [analysisSize, setAnalysisSize] = useState<AnalysisSize | null>(null);
   const [activeLevel, setActiveLevel] = useState("ground");
   const [visibleLevels, setVisibleLevels] = useState(() => new Set(["ground", "upper"]));
   const [exploded, setExploded] = useState(false);
@@ -112,7 +147,7 @@ export default function Home() {
     };
   }, [imageUrl]);
 
-  const previewLevels = buildPreviewLevels(regions);
+  const previewLevels = buildPreviewLevels(regions, structures);
   const selectedRegion = regions.find((region) => region.id === activeLevel) ?? regions[0];
   const selectedLevel = previewLevels.find((level) => level.id === activeLevel) ?? previewLevels[0] ?? sampleLevels[0];
 
@@ -130,11 +165,22 @@ export default function Home() {
     await sleep(420);
     setAnalysisStep(1);
     let proposedRegions = sampleRegions;
-    if (!useSample && imageUrl) proposedRegions = await findPlanRegions(imageUrl);
+    let proposedStructures: StructureMap = {};
+    let proposedSize: AnalysisSize | null = null;
+    if (!useSample && imageUrl) {
+      const analysis = await inspectFloorplan(imageUrl);
+      proposedRegions = analysis.regions;
+      proposedStructures = analysis.structures;
+      proposedSize = analysis.size;
+    }
     await sleep(520);
     setAnalysisStep(2);
-    await sleep(560);
+    await sleep(460);
+    setAnalysisStep(3);
+    await sleep(420);
     setRegions(proposedRegions);
+    setStructures(proposedStructures);
+    setAnalysisSize(proposedSize);
     setActiveLevel(proposedRegions[0]?.id ?? "ground");
     setVisibleLevels(new Set(proposedRegions.slice(0, 2).map((region) => region.id)));
     setWallOpacity(1);
@@ -184,6 +230,7 @@ export default function Home() {
     return (
       <Workspace
         activeLevel={activeLevel}
+        analysisSize={analysisSize}
         exploded={exploded}
         imageUrl={imageUrl}
         mobilePanel={mobilePanel}
@@ -195,6 +242,7 @@ export default function Home() {
         reverseLevelOrder={reverseLevelOrder}
         selectedLevel={selectedLevel}
         selectedRegion={selectedRegion}
+        structures={structures}
         setActiveLevel={setActiveLevel}
         setExploded={setExploded}
         setMobilePanel={setMobilePanel}
@@ -283,6 +331,7 @@ export default function Home() {
 
 function Workspace({
   activeLevel,
+  analysisSize,
   exploded,
   imageUrl,
   mobilePanel,
@@ -294,6 +343,7 @@ function Workspace({
   reverseLevelOrder,
   selectedLevel,
   selectedRegion,
+  structures,
   setActiveLevel,
   setExploded,
   setMobilePanel,
@@ -307,6 +357,7 @@ function Workspace({
   wallOpacity,
 }: {
   activeLevel: string;
+  analysisSize: AnalysisSize | null;
   exploded: boolean;
   imageUrl: string | null;
   mobilePanel: "levels" | "canvas" | "details";
@@ -318,6 +369,7 @@ function Workspace({
   reverseLevelOrder: () => void;
   selectedLevel: Level;
   selectedRegion: SourceRegion;
+  structures: StructureMap;
   setActiveLevel: (id: string) => void;
   setExploded: (value: boolean) => void;
   setMobilePanel: (panel: "levels" | "canvas" | "details") => void;
@@ -417,7 +469,14 @@ function Workspace({
 
           <div className="canvas-stage">
             {viewMode === "review" ? (
-              <PlanReview imageUrl={imageUrl} regions={regions} activeLevel={activeLevel} setActiveLevel={setActiveLevel} />
+              <PlanReview
+                imageUrl={imageUrl}
+                regions={regions}
+                structures={structures}
+                analysisSize={analysisSize}
+                activeLevel={activeLevel}
+                setActiveLevel={setActiveLevel}
+              />
             ) : (
               <Suspense fallback={<div className="viewer-loading"><Box size={22} /><span>Building the 3D twin…</span></div>}>
                 <TwinViewer exploded={exploded} levels={previewLevels} visibleLevels={visibleLevels} wallOpacity={wallOpacity} />
@@ -446,7 +505,7 @@ function Workspace({
         <aside className={`detail-panel ${mobilePanel === "details" ? "mobile-active" : ""}`}>
           <div className="panel-heading details-heading">
             <div><span className="panel-kicker">Review status</span><h2>{selectedLevel.name}</h2></div>
-            <span className="match-badge"><Check size={13} /> {Math.round(selectedRegion.confidence * 100)}%</span>
+            <span className="match-badge"><Check size={13} /> {Math.round((selectedLevel.detectionConfidence ?? selectedRegion.confidence) * 100)}%</span>
           </div>
 
           <div className="progress-row"><span><i className="complete" /><i className="complete" /><i className="complete" /><i /></span><em>3 of 4 checks</em></div>
@@ -493,13 +552,13 @@ function Workspace({
 
           <div className="attention-card">
             <span className="attention-icon"><Ruler size={18} /></span>
-            <div><strong>{selectedLevel.scaleStatus === "resolved" ? "Scale verified" : "One measurement needed"}</strong><p>{selectedLevel.scaleStatus === "resolved" ? "Dimensions agree across this floor." : "Draw a line across a known wall and enter its length."}</p></div>
+            <div><strong>{selectedLevel.source === "detected" ? "Multi-pass structure" : selectedLevel.scaleStatus === "resolved" ? "Scale verified" : "One measurement needed"}</strong><p>{selectedLevel.source === "detected" ? "Thick strokes, wall topology and opening evidence are cross-checked before geometry is accepted." : selectedLevel.scaleStatus === "resolved" ? "Dimensions agree across this floor." : "Draw a line across a known wall and enter its length."}</p></div>
             <button>{selectedLevel.scaleStatus === "resolved" ? "Review" : "Measure"}</button>
           </div>
 
           <div className="detail-footer">
             <button className="primary-action">Confirm this level <ArrowRight size={17} /></button>
-            <p>The structural detector will replace the sample geometry in the next service milestone.</p>
+            <p>{selectedLevel.source === "detected" ? "Blue = walls · amber = openings · green = balcony or terrace. Review uncertain geometry before confirming." : "The sample demonstrates the review flow with prepared geometry."}</p>
           </div>
         </aside>
       </div>
@@ -513,10 +572,73 @@ function Workspace({
   );
 }
 
-function PlanReview({ imageUrl, regions, activeLevel, setActiveLevel }: { imageUrl: string | null; regions: SourceRegion[]; activeLevel: string; setActiveLevel: (id: string) => void }) {
+function PlanReview({
+  imageUrl,
+  regions,
+  structures,
+  analysisSize,
+  activeLevel,
+  setActiveLevel,
+}: {
+  imageUrl: string | null;
+  regions: SourceRegion[];
+  structures: StructureMap;
+  analysisSize: AnalysisSize | null;
+  activeLevel: string;
+  setActiveLevel: (id: string) => void;
+}) {
   return (
     <div className={`plan-review ${imageUrl ? "has-image" : "sample-review"}`}>
       {imageUrl ? <img src={imageUrl} alt="Uploaded floorplan" /> : <SampleSheet />}
+      {analysisSize && (
+        <svg
+          className="structure-overlay"
+          viewBox={`0 0 ${analysisSize.width} ${analysisSize.height}`}
+          preserveAspectRatio="none"
+          aria-label="Detected walls, openings and exterior areas"
+        >
+          {regions.flatMap((region) => structures[region.id]?.outdoorAreas.map((area) => (
+            <rect
+              key={`${region.id}-${area.id}`}
+              className={`detected-outdoor ${activeLevel === region.id ? "active" : ""}`}
+              x={area.x}
+              y={area.y}
+              width={area.width}
+              height={area.height}
+            />
+          )) ?? [])}
+          {regions.flatMap((region) => structures[region.id]?.walls.map((wall) => (
+            <g key={`${region.id}-${wall.id}`} className={activeLevel === region.id ? "active" : ""}>
+              <line
+                className="detected-wall"
+                x1={wall.start[0]}
+                y1={wall.start[1]}
+                x2={wall.end[0]}
+                y2={wall.end[1]}
+                strokeWidth={Math.max(2, wall.thickness * 0.72)}
+              />
+              {wall.openings.map((opening, index) => {
+                const dx = wall.end[0] - wall.start[0];
+                const dy = wall.end[1] - wall.start[1];
+                const length = Math.max(1, Math.hypot(dx, dy));
+                const from = opening.offset / length;
+                const to = (opening.offset + opening.width) / length;
+                return (
+                  <line
+                    key={`${wall.id}-opening-${index}`}
+                    className={`detected-opening ${opening.kind}`}
+                    x1={wall.start[0] + dx * from}
+                    y1={wall.start[1] + dy * from}
+                    x2={wall.start[0] + dx * to}
+                    y2={wall.start[1] + dy * to}
+                    strokeWidth={Math.max(4, wall.thickness)}
+                  />
+                );
+              })}
+            </g>
+          )) ?? [])}
+        </svg>
+      )}
       <div className="region-overlay">
         {regions.map((region, index) => (
           <button
@@ -528,16 +650,17 @@ function PlanReview({ imageUrl, regions, activeLevel, setActiveLevel }: { imageU
             <span>{index + 1}</span>
             <strong>{region.name}</strong>
             <em>{Math.round(region.confidence * 100)}%</em>
-            {region.hasOutdoorArea && <small>Balcony / terrace included</small>}
+            {region.hasOutdoorArea && <small>Balcony / terrace detected</small>}
           </button>
         ))}
       </div>
+      {analysisSize && <div className="detection-legend"><span className="wall" />Walls <span className="opening" />Doors/windows <span className="outdoor" />Balcony</div>}
     </div>
   );
 }
 
 function AnalysisScreen({ step }: { step: number }) {
-  const steps = ["Reading the document", "Separating floor regions", "Preparing the review workspace"];
+  const steps = ["Reading the document", "Separating floor regions", "Tracing walls and openings", "Cross-checking the structure"];
   return (
     <main className="analysis-screen">
       <Brand />
@@ -552,7 +675,7 @@ function AnalysisScreen({ step }: { step: number }) {
             </div>
           ))}
         </div>
-        <p className="analysis-note">Structural wall detection is intentionally a separate service milestone.</p>
+        <p className="analysis-note">Geometry is accepted only when stroke, topology and opening evidence agree.</p>
       </div>
     </main>
   );

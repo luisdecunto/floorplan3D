@@ -5,7 +5,7 @@
 import { ContactShadows, Environment, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { ReactNode } from "react";
-import { type Level, type Wall } from "./scene-data";
+import { type Level, type OutdoorArea, type Wall } from "./scene-data";
 
 export default function TwinViewer({
   exploded,
@@ -33,7 +33,7 @@ export default function TwinViewer({
         <OrbitControls makeDefault minDistance={7} maxDistance={28} minPolarAngle={0.35} maxPolarAngle={Math.PI / 2.05} target={[0, 2.2, 0]} />
         <Environment preset="city" environmentIntensity={0.35} />
       </Canvas>
-      <div className="viewer-legend"><span><i className="legend-wall" /> Structure</span><span><i className="legend-window" /> Windows</span></div>
+      <div className="viewer-legend"><span><i className="legend-wall" /> Structure</span><span><i className="legend-window" /> Windows</span><span><i className="legend-outdoor" /> Balcony</span></div>
     </div>
   );
 }
@@ -50,7 +50,44 @@ function LevelModel({ level, explodeOffset, wallOpacity }: { level: Level; explo
         <boxGeometry args={[level.slab.width - 0.16, 0.05, level.slab.depth - 0.16]} />
         <meshStandardMaterial color="#eee8da" roughness={0.82} />
       </mesh>
+      {(level.outdoorAreas ?? []).map((area) => <OutdoorAreaModel key={area.id} area={area} elevation={y} />)}
       {level.walls.map((wall) => <WallModel key={wall.id} wall={wall} elevation={y} levelHeight={level.ceilingHeight} wallOpacity={wallOpacity} />)}
+    </group>
+  );
+}
+
+function OutdoorAreaModel({ area, elevation }: { area: OutdoorArea; elevation: number }) {
+  const railHeight = 1.05;
+  const railThickness = 0.06;
+  const rails: Array<{ key: string; position: [number, number, number]; size: [number, number, number] }> = [];
+  const addHorizontal = (key: string, z: number) => rails.push({
+    key,
+    position: [area.x, elevation + railHeight / 2, z],
+    size: [area.width, railHeight, railThickness],
+  });
+  const addVertical = (key: string, x: number) => rails.push({
+    key,
+    position: [x, elevation + railHeight / 2, area.z],
+    size: [railThickness, railHeight, area.depth],
+  });
+
+  if (area.side !== "bottom") addHorizontal("rail-top", area.z - area.depth / 2);
+  if (area.side !== "top") addHorizontal("rail-bottom", area.z + area.depth / 2);
+  if (area.side !== "right") addVertical("rail-left", area.x - area.width / 2);
+  if (area.side !== "left") addVertical("rail-right", area.x + area.width / 2);
+
+  return (
+    <group>
+      <mesh position={[area.x, elevation - 0.055, area.z]} receiveShadow castShadow>
+        <boxGeometry args={[area.width, 0.11, area.depth]} />
+        <meshStandardMaterial color="#c9b88f" roughness={0.88} />
+      </mesh>
+      {rails.map((rail) => (
+        <mesh key={rail.key} position={rail.position} castShadow>
+          <boxGeometry args={rail.size} />
+          <meshStandardMaterial color="#535b59" roughness={0.62} metalness={0.18} />
+        </mesh>
+      ))}
     </group>
   );
 }

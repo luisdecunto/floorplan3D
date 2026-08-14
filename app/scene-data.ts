@@ -4,6 +4,7 @@ export type Opening = {
   width: number;
   height: number;
   sill?: number;
+  confidence?: number;
 };
 
 export type Wall = {
@@ -13,6 +14,17 @@ export type Wall = {
   thickness?: number;
   height?: number;
   openings?: Opening[];
+  confidence?: number;
+};
+
+export type OutdoorArea = {
+  id: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  side: "top" | "right" | "bottom" | "left";
+  confidence: number;
 };
 
 export type Level = {
@@ -28,6 +40,9 @@ export type Level = {
   scaleStatus: "resolved" | "needed";
   slab: { width: number; depth: number; x: number; z: number };
   walls: Wall[];
+  outdoorAreas?: OutdoorArea[];
+  detectionConfidence?: number;
+  source?: "sample" | "detected";
 };
 
 const groundWalls: Wall[] = [
@@ -63,6 +78,9 @@ export const sampleLevels: Level[] = [
     scaleStatus: "resolved",
     slab: { width: 10, depth: 7, x: 0, z: 0 },
     walls: groundWalls,
+    outdoorAreas: [],
+    detectionConfidence: 0.96,
+    source: "sample",
   },
   {
     id: "upper",
@@ -77,5 +95,8 @@ export const sampleLevels: Level[] = [
     scaleStatus: "needed",
     slab: { width: 8, depth: 7, x: 0, z: 0 },
     walls: upperWalls,
+    outdoorAreas: [],
+    detectionConfidence: 0.91,
+    source: "sample",
   },
 ];
