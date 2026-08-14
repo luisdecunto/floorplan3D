@@ -83,6 +83,8 @@ if (!manifest) {
         const topPlan = structures[regions[0].id];
         const bottomPlan = structures[regions[1].id];
         assert.equal(topPlan.outdoorAreas.length, 1, "first-floor balcony should be retained");
+        assert.equal(topPlan.stairs.length, 1, "first-floor stair symbol should be retained");
+        assert.equal(bottomPlan.stairs.length, 1, "ground-floor stair symbol should be retained");
         assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
         assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
       }

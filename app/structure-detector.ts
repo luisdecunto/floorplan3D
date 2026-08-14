@@ -1,5 +1,5 @@
 import type { SourceRegion } from "./plan-regions";
-import type { Level, Opening, OutdoorArea, Wall } from "./scene-data";
+import type { Level, Opening, OutdoorArea, Stair, Wall } from "./scene-data";
 
 export type Axis = "horizontal" | "vertical";
 
@@ -30,12 +30,25 @@ export type DetectedOutdoorArea = {
   confidence: number;
 };
 
+export type DetectedStair = {
+  id: string;
+  runAxis: Axis;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  stepCount: number;
+  confidence: number;
+};
+
 export type DetectedStructure = {
   regionId: string;
   sourceWidth: number;
   sourceHeight: number;
   walls: DetectedWall[];
   outdoorAreas: DetectedOutdoorArea[];
+  stairs: DetectedStair[];
+  floorTextureUrl?: string;
   footprint: { x: number; y: number; width: number; height: number };
   roomCount: number;
   confidence: number;
@@ -45,6 +58,7 @@ export type DetectedStructure = {
     geometryVotes: number;
     topologyVotes: number;
     openingVotes: number;
+    stairVotes: number;
   };
 };
 
@@ -853,6 +867,212 @@ function detectOutdoorAreas(rawSegments: Segment[], footprint: Bounds, wallThick
   return result.sort((a, b) => b.confidence - a.confidence).slice(0, 2);
 }
 
+type StairBox = Bounds & { runAxis: Axis; railCount: number };
+
+function consolidateStairRails(rawSegments: Segment[], minimumDimension: number, wallThickness: number) {
+  // Compressed screenshots often preserve only short fragments of one stair
+  // stringer; the paired-rail and cross-stroke checks below provide the guard
+  // against admitting arbitrary short lines.
+  const minimumLength = minimumDimension * 0.052;
+  const maximumLength = minimumDimension * 0.52;
+  const maximumThickness = Math.max(4, wallThickness * 0.82);
+  const maximumGap = minimumDimension * 0.16;
+  const rails = rawSegments
+    .filter((segment) => (
+      segment.thickness <= maximumThickness
+      && segment.to - segment.from >= minimumLength
+      && segment.to - segment.from <= maximumLength
+    ))
+    .sort((a, b) => a.axis.localeCompare(b.axis) || a.line - b.line || a.from - b.from);
+  const result: Segment[] = [];
+
+  rails.forEach((rail) => {
+    const existing = result.find((candidate) => (
+      candidate.axis === rail.axis
+      && Math.abs(candidate.line - rail.line) <= Math.max(2, wallThickness * 0.58)
+      && rail.from <= candidate.to + maximumGap
+      && rail.to >= candidate.from - maximumGap
+    ));
+    if (!existing) {
+      result.push({ ...rail });
+      return;
+    }
+    const existingLength = existing.to - existing.from;
+    const railLength = rail.to - rail.from;
+    existing.line = (existing.line * existingLength + rail.line * railLength) / Math.max(1, existingLength + railLength);
+    existing.from = Math.min(existing.from, rail.from);
+    existing.to = Math.max(existing.to, rail.to);
+    existing.thickness = Math.min(existing.thickness, rail.thickness);
+    existing.density = Math.max(existing.density, rail.density);
+  });
+  return result;
+}
+
+function mergeStairBoxes(boxes: StairBox[], padding: number) {
+  const merged: StairBox[] = [];
+  boxes.forEach((box) => {
+    const target = merged.find((candidate) => {
+      if (candidate.runAxis !== box.runAxis) return false;
+      const crossAdjacent = box.runAxis === "vertical"
+        ? Math.min(Math.abs(candidate.maxX - box.minX), Math.abs(box.maxX - candidate.minX)) <= padding
+        : Math.min(Math.abs(candidate.maxY - box.minY), Math.abs(box.maxY - candidate.minY)) <= padding;
+      const runOverlap = box.runAxis === "vertical"
+        ? Math.min(candidate.maxY, box.maxY) - Math.max(candidate.minY, box.minY)
+        : Math.min(candidate.maxX, box.maxX) - Math.max(candidate.minX, box.minX);
+      return crossAdjacent && runOverlap > 0;
+    });
+    if (!target) {
+      merged.push({ ...box });
+      return;
+    }
+    target.minX = Math.min(target.minX, box.minX);
+    target.minY = Math.min(target.minY, box.minY);
+    target.maxX = Math.max(target.maxX, box.maxX);
+    target.maxY = Math.max(target.maxY, box.maxY);
+    target.railCount += box.railCount;
+  });
+  return merged;
+}
+
+function stairCrossStrokeCenters(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  box: StairBox,
+  wallThickness: number,
+) {
+  const horizontalRun = box.runAxis === "horizontal";
+  const majorStart = Math.max(0, Math.ceil(horizontalRun ? box.minX : box.minY));
+  const majorEnd = Math.min(horizontalRun ? width - 1 : height - 1, Math.floor(horizontalRun ? box.maxX : box.maxY));
+  const minorStart = Math.max(0, Math.ceil(horizontalRun ? box.minY : box.minX) + 2);
+  const minorEnd = Math.min(horizontalRun ? height - 1 : width - 1, Math.floor(horizontalRun ? box.maxY : box.maxX) - 2);
+  const span = Math.max(1, minorEnd - minorStart + 1);
+  const active: boolean[] = [];
+
+  for (let major = majorStart; major <= majorEnd; major += 1) {
+    let dark = 0;
+    let longest = 0;
+    let run = 0;
+    let onePixelGap = 0;
+    for (let minor = minorStart; minor <= minorEnd; minor += 1) {
+      const x = horizontalRun ? major : minor;
+      const y = horizontalRun ? minor : major;
+      if (mask[y * width + x]) {
+        dark += 1;
+        run += 1 + onePixelGap;
+        onePixelGap = 0;
+        longest = Math.max(longest, run);
+      } else if (run > 0 && onePixelGap === 0) {
+        onePixelGap = 1;
+      } else {
+        run = 0;
+        onePixelGap = 0;
+      }
+    }
+    active.push(dark / span >= 0.2 && longest / span >= 0.28);
+  }
+
+  const centers: number[] = [];
+  let start = -1;
+  active.forEach((value, index) => {
+    if (value && start < 0) start = index;
+    if ((!value || index === active.length - 1) && start >= 0) {
+      const end = value && index === active.length - 1 ? index : index - 1;
+      const thickness = end - start + 1;
+      if (thickness <= Math.max(5, wallThickness * 0.9)) centers.push(majorStart + (start + end) / 2);
+      start = -1;
+    }
+  });
+  return centers;
+}
+
+function detectStairs(
+  rawSegments: Segment[],
+  mediumMask: Uint8Array,
+  width: number,
+  height: number,
+  footprint: Bounds,
+  minimumDimension: number,
+  wallThickness: number,
+) {
+  const rails = consolidateStairRails(rawSegments, minimumDimension, wallThickness);
+  const minimumSeparation = minimumDimension * 0.065;
+  const maximumSeparation = minimumDimension * 0.31;
+  const minimumOverlap = minimumDimension * 0.045;
+  const boxes: StairBox[] = [];
+
+  rails.forEach((first, firstIndex) => {
+    rails.slice(firstIndex + 1).forEach((second) => {
+      if (first.axis !== second.axis) return;
+      const separation = Math.abs(second.line - first.line);
+      const overlap = Math.max(0, Math.min(first.to, second.to) - Math.max(first.from, second.from));
+      if (separation < minimumSeparation || separation > maximumSeparation || overlap < minimumOverlap) return;
+      const runFrom = Math.min(first.from, second.from);
+      const runTo = Math.max(first.to, second.to);
+      const runLength = runTo - runFrom;
+      if (runLength < separation * 0.52 || runLength > separation * 4.8) return;
+
+      const box: StairBox = first.axis === "vertical"
+        ? { minX: Math.min(first.line, second.line), maxX: Math.max(first.line, second.line), minY: runFrom, maxY: runTo, runAxis: "vertical", railCount: 2 }
+        : { minX: runFrom, maxX: runTo, minY: Math.min(first.line, second.line), maxY: Math.max(first.line, second.line), runAxis: "horizontal", railCount: 2 };
+      const centerX = (box.minX + box.maxX) / 2;
+      const centerY = (box.minY + box.maxY) / 2;
+      if (centerX < footprint.minX - wallThickness * 2 || centerX > footprint.maxX + wallThickness * 2) return;
+      if (centerY < footprint.minY - wallThickness * 2 || centerY > footprint.maxY + wallThickness * 2) return;
+      boxes.push(box);
+    });
+  });
+
+  const footprintMinimum = Math.min(footprint.maxX - footprint.minX, footprint.maxY - footprint.minY);
+  const validatedBoxes = boxes.filter((box) => {
+    const boxWidth = box.maxX - box.minX;
+    const boxHeight = box.maxY - box.minY;
+    const crossLength = box.runAxis === "vertical" ? boxWidth : boxHeight;
+    if (crossLength > footprintMinimum * 0.32) return false;
+    return stairCrossStrokeCenters(mediumMask, width, height, box, wallThickness).length >= 2;
+  });
+
+  const detected = mergeStairBoxes(validatedBoxes, Math.max(3, wallThickness * 0.75))
+    .flatMap((box, index): DetectedStair[] => {
+      const centers = stairCrossStrokeCenters(mediumMask, width, height, box, wallThickness);
+      if (centers.length < 2) return [];
+      const runLength = box.runAxis === "vertical" ? box.maxY - box.minY : box.maxX - box.minX;
+      const gaps = centers.slice(1).map((center, gapIndex) => center - centers[gapIndex]).filter((gap) => gap >= 2);
+      const sortedGaps = [...gaps].sort((a, b) => a - b);
+      const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)] ?? runLength / 7;
+      const stepCount = clamp(Math.round(runLength / Math.max(3, medianGap)), Math.max(5, centers.length), 16);
+      if (stepCount < 6) return [];
+      const boxWidth = box.maxX - box.minX;
+      const boxHeight = box.maxY - box.minY;
+      const crossLength = box.runAxis === "vertical" ? boxWidth : boxHeight;
+      if (crossLength > footprintMinimum * 0.32) return [];
+      if (boxWidth > (footprint.maxX - footprint.minX) * 0.42 || boxHeight > (footprint.maxY - footprint.minY) * 0.54) return [];
+      return [{
+        id: `stair-${index + 1}`,
+        runAxis: box.runAxis,
+        x: box.minX,
+        y: box.minY,
+        width: boxWidth,
+        height: boxHeight,
+        stepCount,
+        confidence: clamp(0.58 + Math.min(0.2, centers.length * 0.035) + Math.min(0.08, (box.railCount - 2) * 0.02), 0.62, 0.9),
+      }];
+    })
+    .sort((a, b) => b.confidence - a.confidence);
+  const unique: DetectedStair[] = [];
+  detected.forEach((stair) => {
+    const duplicate = unique.some((candidate) => {
+      if (candidate.runAxis !== stair.runAxis) return false;
+      const intersectionWidth = Math.max(0, Math.min(candidate.x + candidate.width, stair.x + stair.width) - Math.max(candidate.x, stair.x));
+      const intersectionHeight = Math.max(0, Math.min(candidate.y + candidate.height, stair.y + stair.height) - Math.max(candidate.y, stair.y));
+      const intersection = intersectionWidth * intersectionHeight;
+      return intersection / Math.max(1, Math.min(candidate.width * candidate.height, stair.width * stair.height)) >= 0.72;
+    });
+    if (!duplicate) unique.push(stair);
+  });
+  return unique.slice(0, 2).map((stair, index) => ({ ...stair, id: `stair-${index + 1}` }));
+}
+
 function estimateRoomCount(walls: DetectedWall[], footprint: Bounds) {
   if (walls.length < 4) return 0;
   const gridSize = 72;
@@ -974,6 +1194,7 @@ export function detectFloorStructure(
     footprintBounds,
   );
   const outdoorAreas = detectOutdoorAreas(rawSegments, footprintBounds, wallThickness);
+  const stairs = detectStairs(rawSegments, mediumMask, width, height, footprintBounds, minimumDimension, wallThickness);
   const openingCount = walls.reduce((sum, wall) => sum + wall.openings.length, 0);
   const topologyVotes = walls.filter((wall) => walls.some((other) => other !== wall && (
     Math.hypot(wall.start[0] - other.start[0], wall.start[1] - other.start[1]) <= wallThickness * 2.5
@@ -985,7 +1206,8 @@ export function detectFloorStructure(
       + Math.min(0.24, walls.length * 0.018)
       + Math.min(0.1, topologyVotes * 0.012)
       + Math.min(0.08, openingCount * 0.012)
-      + (outdoorAreas.length ? 0.03 : 0),
+      + (outdoorAreas.length ? 0.03 : 0)
+      + (stairs.length ? 0.025 : 0),
     walls.length >= 4 ? 0.58 : 0.38,
     0.94,
   );
@@ -996,6 +1218,7 @@ export function detectFloorStructure(
     sourceHeight: height,
     walls,
     outdoorAreas,
+    stairs,
     footprint: {
       x: footprintBounds.minX,
       y: footprintBounds.minY,
@@ -1010,6 +1233,7 @@ export function detectFloorStructure(
       geometryVotes: walls.length,
       topologyVotes,
       openingVotes: openingCount,
+      stairVotes: stairs.length,
     },
   };
 }
@@ -1096,6 +1320,16 @@ export function structureToLevel(
     side: area.side,
     confidence: area.confidence,
   }));
+  const stairs: Stair[] = structure.stairs.map((stair) => ({
+    id: stair.id,
+    x: (stair.x + stair.width / 2 - centerX) * pixelsToMetres,
+    z: (stair.y + stair.height / 2 - centerY) * pixelsToMetres,
+    width: stair.width * pixelsToMetres,
+    depth: stair.height * pixelsToMetres,
+    runAxis: stair.runAxis,
+    stepCount: stair.stepCount,
+    confidence: stair.confidence,
+  }));
 
   return {
     id: region.id,
@@ -1111,6 +1345,8 @@ export function structureToLevel(
     slab: { width: sceneWidth, depth: sceneDepth, x: 0, z: 0 },
     walls,
     outdoorAreas,
+    stairs,
+    floorTextureUrl: structure.floorTextureUrl,
     detectionConfidence: structure.confidence,
     source: "detected",
   };

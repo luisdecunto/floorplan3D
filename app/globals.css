@@ -882,6 +882,10 @@ select:focus-visible {
   opacity: 0.38;
 }
 .detected-outdoor.active { opacity: 0.9; }
+.detected-stair { opacity: 0.35; transition: opacity 140ms ease; }
+.detected-stair.active { opacity: 0.92; }
+.detected-stair rect { fill: rgba(126, 78, 170, 0.14); stroke: #7e4eaa; stroke-width: 2; }
+.detected-stair line { stroke: #7e4eaa; stroke-width: 1.35; }
 .region-overlay { position: absolute; inset: 0; z-index: 3; }
 .detection-legend {
   position: absolute;
@@ -903,6 +907,7 @@ select:focus-visible {
 .detection-legend span:first-child { margin-left: 0; }
 .detection-legend .wall { background: #2457df; }
 .detection-legend .opening { background: #f2a51a; }
+.detection-legend .stair { height: 8px; background: rgba(126, 78, 170, 0.22); border: 1px solid #7e4eaa; }
 .detection-legend .outdoor { height: 8px; background: rgba(85, 177, 104, 0.24); border: 1px dashed #3b9a55; }
 .region-box {
   position: absolute;
@@ -975,12 +980,14 @@ select:focus-visible {
   font-size: 11px;
   font-weight: 800;
 }
-.viewer-legend { position: absolute; top: 15px; left: 15px; padding: 9px 11px; background: rgba(255, 254, 250, 0.86); display: flex; gap: 13px; font-size: 9px; font-weight: 750; }
+.viewer-legend { position: absolute; top: 15px; left: 15px; max-width: calc(100% - 270px); padding: 9px 11px; background: rgba(255, 254, 250, 0.86); display: flex; flex-wrap: wrap; gap: 7px 13px; font-size: 9px; font-weight: 750; }
 .viewer-legend span { display: flex; align-items: center; gap: 6px; }
 .viewer-legend i { width: 8px; height: 8px; display: block; }
 .legend-wall { background: #f3f0e8; border: 1px solid #a8a49a; }
 .legend-window { background: #7fc6d1; }
+.legend-stair { background: #c79a61; border: 1px solid #473f51; }
 .legend-outdoor { background: #c9b88f; border: 1px solid #535b59; }
+.legend-detail { background: #fff; border: 1px solid #181914; background-image: linear-gradient(135deg, transparent 42%, #181914 44%, #181914 54%, transparent 56%); }
 
 .wall-opacity-control {
   position: absolute;
@@ -1056,7 +1063,7 @@ select:focus-visible {
   cursor: pointer;
 }
 .boundary-controls button:hover { background: var(--white); border-color: var(--ink); }
-.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
 .stat-grid div { padding: 12px 9px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 .stat-grid div:last-child { border: 0; }
 .stat-grid strong { font: 500 22px Georgia, serif; }

@@ -58,11 +58,13 @@ test("detected pixel geometry is converted into a non-sample 3D level", () => {
   const { pixels, width, height } = syntheticPlan();
   const region = { id: "level-a", name: "First floor", x: 0, y: 0, width: 1, height: 1, confidence: 0.9, hasOutdoorArea: true };
   const structure = detectFloorStructure(pixels, width, height, region);
+  structure.stairs = [{ id: "stair-test", runAxis: "vertical", x: 145, y: 38, width: 32, height: 70, stepCount: 9, confidence: 0.84 }];
   const level = structureToLevel(structure, region, 1);
 
   assert.equal(level.source, "detected");
   assert.equal(level.walls.length, structure.walls.length);
   assert.equal(level.outdoorAreas?.length, 1);
+  assert.equal(level.stairs?.length, structure.stairs.length);
   assert.equal(level.elevation, 3.05);
   assert.ok(level.walls.every((wall) => wall.thickness && wall.thickness >= 0.1));
 });
