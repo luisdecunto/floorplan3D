@@ -42,6 +42,7 @@ import {
 } from "./plan-regions";
 import { sampleLevels, type Level } from "./scene-data";
 import {
+  addDocumentOpening,
   createFloorplanDocumentV2,
   documentRegions,
   documentStructures,
@@ -269,6 +270,14 @@ export default function Home() {
     setProjectMessage("Wall removed and the space marked open. Undo is available.");
   }
 
+  function addOpening(kind: "door" | "window") {
+    if (!document || !selectedWallId) return;
+    const next = addDocumentOpening(document, activeLevel, selectedWallId, kind);
+    setDocument(next);
+    setStructures(documentStructures(next));
+    setProjectMessage(`${kind === "door" ? "Door" : "Window"} added at the wall midpoint. Drag positioning is the next editor refinement.`);
+  }
+
   function undoEdit() {
     if (!document) return;
     const next = undoLastDocumentEdit(document);
@@ -389,6 +398,7 @@ export default function Home() {
     return (
       <Workspace
         activeLevel={activeLevel}
+        addOpening={addOpening}
         alignStairs={alignStairs}
         analysisSize={analysisSize}
         confirmLevel={confirmLevel}
@@ -503,6 +513,7 @@ export default function Home() {
 
 function Workspace({
   activeLevel,
+  addOpening,
   alignStairs,
   analysisSize,
   confirmLevel,
@@ -537,6 +548,7 @@ function Workspace({
   wallOpacity,
 }: {
   activeLevel: string;
+  addOpening: (kind: "door" | "window") => void;
   alignStairs: () => void;
   analysisSize: AnalysisSize | null;
   confirmLevel: () => void;
@@ -736,6 +748,10 @@ function Workspace({
               <span className="detail-label">Selected boundary</span>
               <strong>{selectedWall.axis === "horizontal" ? "Horizontal" : "Vertical"} wall · {Math.round(selectedWall.confidence * 100)}% evidence</strong>
               <p>If this line is furniture, a dimension, or an open boundary, mark it as open. The original proposal remains in edit history.</p>
+              <div className="opening-actions">
+                <button onClick={() => addOpening("door")}>Add door</button>
+                <button onClick={() => addOpening("window")}>Add window</button>
+              </div>
               <button className="danger-action" onClick={removeSelectedWall}><Trash2 size={14} /> Mark as open space</button>
             </div>
           )}

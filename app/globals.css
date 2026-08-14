@@ -1080,6 +1080,8 @@ select:focus-visible {
   cursor: pointer;
 }
 .danger-action { border-color: #c65c43; color: #9e321d; background: #fff3ef; }
+.opening-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
+.opening-actions button { min-height: 32px; border: 1px solid #98a9d7; background: #eef2ff; color: #2c478f; font-size: 9px; font-weight: 850; cursor: pointer; }
 .issue-list p { padding: 8px; margin: 0 0 6px; border-left: 2px solid #d5ad33; background: #fff9e9; }
 .wall-review-list > p { margin: 0 0 9px; font-size: 9px; line-height: 1.4; color: var(--muted); }
 .wall-review-list > div { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }

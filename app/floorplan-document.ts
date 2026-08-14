@@ -29,7 +29,7 @@ export type ReviewIssue = {
 export type FloorplanEdit = {
   id: string;
   levelId: string;
-  kind: "remove-wall" | "restore-wall" | "rename-level" | "set-outdoor-area" | "align-stairs";
+  kind: "remove-wall" | "restore-wall" | "add-opening" | "rename-level" | "set-outdoor-area" | "align-stairs";
   entityId?: string;
   createdAt: string;
   before?: unknown;
@@ -231,6 +231,30 @@ export function removeDocumentWall(document: FloorplanDocumentV2, levelId: strin
   }), { kind: "remove-wall", entityId: wallId, before: wall, after: null });
 }
 
+export function addDocumentOpening(
+  document: FloorplanDocumentV2,
+  levelId: string,
+  wallId: string,
+  kind: "door" | "window",
+) {
+  const level = document.levels.find((candidate) => candidate.id === levelId);
+  const wall = level?.structure.walls.find((candidate) => candidate.id === wallId);
+  if (!level || !wall) return document;
+  const length = Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1]);
+  const width = Math.min(length * 0.42, Math.max(12, length * (kind === "door" ? 0.18 : 0.24)));
+  const offset = Math.max(0, length / 2 - width / 2);
+  const before = [...wall.openings];
+  const after = [...before, { kind, offset, width, confidence: 1 }];
+  return updateDocumentLevel(document, levelId, (current) => ({
+    ...current,
+    confirmed: false,
+    structure: {
+      ...current.structure,
+      walls: current.structure.walls.map((candidate) => candidate.id === wallId ? { ...candidate, openings: after } : candidate),
+    },
+  }), { kind: "add-opening", entityId: wallId, before, after });
+}
+
 export function undoLastDocumentEdit(document: FloorplanDocumentV2) {
   const edit = document.edits.at(-1);
   if (!edit) return document;
@@ -238,6 +262,19 @@ export function undoLastDocumentEdit(document: FloorplanDocumentV2) {
     const restored = updateDocumentLevel(document, edit.levelId, (level) => ({
       ...level,
       structure: { ...level.structure, walls: [...level.structure.walls, edit.before as DetectedStructure["walls"][number]] },
+    }));
+    return { ...restored, edits: document.edits.slice(0, -1) };
+  }
+  if (edit.kind === "add-opening" && Array.isArray(edit.before) && edit.entityId) {
+    const restored = updateDocumentLevel(document, edit.levelId, (level) => ({
+      ...level,
+      structure: {
+        ...level.structure,
+        walls: level.structure.walls.map((wall) => wall.id === edit.entityId ? {
+          ...wall,
+          openings: edit.before as DetectedStructure["walls"][number]["openings"],
+        } : wall),
+      },
     }));
     return { ...restored, edits: document.edits.slice(0, -1) };
   }

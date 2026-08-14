@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  addDocumentOpening,
   createFloorplanDocumentV2,
   documentRegions,
   removeDocumentWall,
@@ -59,6 +60,10 @@ test("V2 project JSON preserves structural corrections and supports undo", () =>
   });
   assert.equal(document.schemaVersion, 2);
   assert.deepEqual(documentRegions(document).map(({ name }) => name), ["Ground floor", "First floor"]);
+
+  const withDoor = addDocumentOpening(document, "upper", "upper-wall", "door");
+  assert.equal(withDoor.levels.find(({ id }) => id === "upper").structure.walls[0].openings[0].kind, "door");
+  assert.equal(undoLastDocumentEdit(withDoor).levels.find(({ id }) => id === "upper").structure.walls[0].openings.length, 0);
 
   const corrected = removeDocumentWall(document, "upper", "upper-wall");
   assert.equal(corrected.levels.find(({ id }) => id === "upper").structure.walls.length, 0);
