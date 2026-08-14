@@ -82,6 +82,17 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
     const pixels = context.getImageData(0, 0, width, height).data;
     let regions = detectPlanRegions(pixels, width, height);
     const structures = detectFloorStructures(pixels, width, height, regions);
+    Object.values(structures).forEach((structure) => {
+      const cropX = Math.max(0, Math.floor(structure.footprint.x));
+      const cropY = Math.max(0, Math.floor(structure.footprint.y));
+      const cropWidth = Math.max(1, Math.min(width - cropX, Math.ceil(structure.footprint.width)));
+      const cropHeight = Math.max(1, Math.min(height - cropY, Math.ceil(structure.footprint.height)));
+      const floorCanvas = document.createElement("canvas");
+      floorCanvas.width = cropWidth;
+      floorCanvas.height = cropHeight;
+      floorCanvas.getContext("2d")?.drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      structure.floorTextureUrl = floorCanvas.toDataURL("image/jpeg", 0.86);
+    });
     regions = regions.map((region) => ({
       ...region,
       hasOutdoorArea: structures[region.id]?.outdoorAreas.length > 0,
@@ -321,9 +332,9 @@ export default function Home() {
       </section>
 
       <section className="promise-strip" aria-label="Product capabilities">
-        <Promise icon={<Layers3 size={19} />} title="Multi-level" copy="Separate, align and stack every floor." />
-        <Promise icon={<Ruler size={19} />} title="Real dimensions" copy="Recover scale or calibrate one known length." />
-        <Promise icon={<Smartphone size={19} />} title="Made for mobile" copy="Review your model from wherever you are." />
+        <PromiseCard icon={<Layers3 size={19} />} title="Multi-level" copy="Separate, align and stack every floor." />
+        <PromiseCard icon={<Ruler size={19} />} title="Real dimensions" copy="Recover scale or calibrate one known length." />
+        <PromiseCard icon={<Smartphone size={19} />} title="Made for mobile" copy="Review your model from wherever you are." />
       </section>
     </main>
   );
@@ -540,6 +551,7 @@ function Workspace({
               <div><strong>{selectedLevel.roomCount}</strong><span>rooms</span></div>
               <div><strong>{selectedLevel.wallCount}</strong><span>walls</span></div>
               <div><strong>{selectedLevel.openingCount}</strong><span>openings</span></div>
+              <div><strong>{selectedLevel.stairs?.length ?? 0}</strong><span>stairs</span></div>
             </div>
           </div>
 
@@ -558,7 +570,7 @@ function Workspace({
 
           <div className="detail-footer">
             <button className="primary-action">Confirm this level <ArrowRight size={17} /></button>
-            <p>{selectedLevel.source === "detected" ? "Blue = walls · amber = openings · green = balcony or terrace. Review uncertain geometry before confirming." : "The sample demonstrates the review flow with prepared geometry."}</p>
+            <p>{selectedLevel.source === "detected" ? "Blue = walls · amber = openings · purple = stairs · green = balcony or terrace. Source-plan details remain visible on the 3D floor." : "The sample demonstrates the review flow with prepared geometry."}</p>
           </div>
         </aside>
       </div>
@@ -607,6 +619,18 @@ function PlanReview({
               height={area.height}
             />
           )) ?? [])}
+          {regions.flatMap((region) => structures[region.id]?.stairs.map((stair) => (
+            <g key={`${region.id}-${stair.id}`} className={`detected-stair ${activeLevel === region.id ? "active" : ""}`}>
+              <rect x={stair.x} y={stair.y} width={stair.width} height={stair.height} />
+              {Array.from({ length: Math.min(12, stair.stepCount) }, (_, index) => {
+                const count = Math.min(12, stair.stepCount);
+                const progress = (index + 1) / (count + 1);
+                return stair.runAxis === "vertical"
+                  ? <line key={index} x1={stair.x} x2={stair.x + stair.width} y1={stair.y + stair.height * progress} y2={stair.y + stair.height * progress} />
+                  : <line key={index} y1={stair.y} y2={stair.y + stair.height} x1={stair.x + stair.width * progress} x2={stair.x + stair.width * progress} />;
+              })}
+            </g>
+          )) ?? [])}
           {regions.flatMap((region) => structures[region.id]?.walls.map((wall) => (
             <g key={`${region.id}-${wall.id}`} className={activeLevel === region.id ? "active" : ""}>
               <line
@@ -654,7 +678,7 @@ function PlanReview({
           </button>
         ))}
       </div>
-      {analysisSize && <div className="detection-legend"><span className="wall" />Walls <span className="opening" />Doors/windows <span className="outdoor" />Balcony</div>}
+      {analysisSize && <div className="detection-legend"><span className="wall" />Walls <span className="opening" />Doors/windows <span className="stair" />Stairs <span className="outdoor" />Balcony</div>}
     </div>
   );
 }
@@ -690,7 +714,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function Promise({ icon, title, copy }: { icon: ReactNode; title: string; copy: string }) {
+function PromiseCard({ icon, title, copy }: { icon: ReactNode; title: string; copy: string }) {
   return <div className="promise"><span>{icon}</span><div><strong>{title}</strong><p>{copy}</p></div></div>;
 }
 

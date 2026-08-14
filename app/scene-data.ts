@@ -27,6 +27,17 @@ export type OutdoorArea = {
   confidence: number;
 };
 
+export type Stair = {
+  id: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  runAxis: "horizontal" | "vertical";
+  stepCount: number;
+  confidence: number;
+};
+
 export type Level = {
   id: string;
   name: string;
@@ -41,6 +52,8 @@ export type Level = {
   slab: { width: number; depth: number; x: number; z: number };
   walls: Wall[];
   outdoorAreas?: OutdoorArea[];
+  stairs?: Stair[];
+  floorTextureUrl?: string;
   detectionConfidence?: number;
   source?: "sample" | "detected";
 };
