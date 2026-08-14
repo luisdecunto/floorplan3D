@@ -473,6 +473,7 @@ function longestPerpendicularRun(mask: Uint8Array, width: number, height: number
 
 function gapEvidence(
   mask: Uint8Array,
+  windowMask: Uint8Array,
   width: number,
   height: number,
   axis: Axis,
@@ -499,7 +500,7 @@ function gapEvidence(
       const x = Math.round(axis === "horizontal" ? coordinate : line + offset);
       const y = Math.round(axis === "horizontal" ? line + offset : coordinate);
       if (x < 0 || x >= width || y < 0 || y >= height) continue;
-      if (mask[y * width + x]) dark += 1;
+      if (windowMask[y * width + x]) dark += 1;
       sampled += 1;
     }
     windowParallel = Math.max(windowParallel, dark / Math.max(1, sampled));
@@ -596,6 +597,7 @@ function railCandidates(segments: Segment[]) {
 function buildWalls(
   segments: Segment[],
   mask: Uint8Array,
+  windowMask: Uint8Array,
   width: number,
   height: number,
   wallThickness: number,
@@ -648,7 +650,7 @@ function buildWalls(
         thickness = Math.max(thickness, segment.thickness);
         continue;
       }
-      const evidence = gapEvidence(mask, width, height, axis, weightedLine, wallEnd, segment.from, thickness, footprint);
+      const evidence = gapEvidence(mask, windowMask, width, height, axis, weightedLine, wallEnd, segment.from, thickness, footprint);
       const maximumOpening = Math.max(18, (axis === "horizontal" ? footprint.maxX - footprint.minX : footprint.maxY - footprint.minY) * 0.34);
       if (evidence && segment.from - wallEnd <= maximumOpening) {
         openings.push({
@@ -681,6 +683,7 @@ function recoverEmbeddedOpenings(
   walls: DetectedWall[],
   strongMask: Uint8Array,
   mediumMask: Uint8Array,
+  windowMask: Uint8Array,
   width: number,
   height: number,
   footprint: Bounds,
@@ -693,9 +696,10 @@ function recoverEmbeddedOpenings(
     const onOuterWall = wall.axis === "horizontal"
       ? Math.min(Math.abs(line - footprint.minY), Math.abs(line - footprint.maxY)) <= outerTolerance
       : Math.min(Math.abs(line - footprint.minX), Math.abs(line - footprint.maxX)) <= outerTolerance;
-    if (onOuterWall) return wall;
+    const scanFrom = Math.max(from, wall.axis === "horizontal" ? footprint.minX : footprint.minY);
+    const scanTo = Math.min(to, wall.axis === "horizontal" ? footprint.maxX : footprint.maxY);
     const radius = Math.max(2, Math.round(wall.thickness / 2));
-    const span = to - from;
+    const span = scanTo - scanFrom;
     const openings = [...wall.openings];
     let gapStart = -1;
     let lastGap = -1;
@@ -712,8 +716,9 @@ function recoverEmbeddedOpenings(
         return Math.max(0, Math.min(lastGap, knownTo) - Math.max(gapStart, knownFrom)) >= Math.min(gapWidth, opening.width) * 0.45;
       });
       if (overlapsKnown) return;
-      const evidence = gapEvidence(mediumMask, width, height, wall.axis, line, gapStart, lastGap, wall.thickness, footprint);
+      const evidence = gapEvidence(mediumMask, windowMask, width, height, wall.axis, line, gapStart, lastGap, wall.thickness, footprint);
       if (!evidence) return;
+      if (onOuterWall && evidence.kind === "door" && evidence.confidence < 0.7) return;
       openings.push({
         kind: evidence.kind,
         offset: gapStart - from,
@@ -722,7 +727,7 @@ function recoverEmbeddedOpenings(
       });
     };
 
-    for (let coordinate = Math.floor(from); coordinate <= Math.ceil(to); coordinate += 1) {
+    for (let coordinate = Math.floor(scanFrom); coordinate <= Math.ceil(scanTo); coordinate += 1) {
       let dark = 0;
       let sampled = 0;
       for (let offset = -radius; offset <= radius; offset += 1) {
@@ -919,7 +924,8 @@ export function inspectStructureEvidence(
 ) {
   const bounds = paperBounds(pixels, width, height, region);
   const threshold = otsuThreshold(pixels, width, bounds);
-  const mediumMask = createMask(pixels, width, height, bounds, Math.min(205, threshold + 26));
+  const windowMask = createMask(pixels, width, height, bounds, Math.min(205, threshold + 26));
+  const mediumMask = createMask(pixels, width, height, bounds, Math.min(210, threshold + 40));
   const strongMask = createMask(pixels, width, height, bounds, threshold);
   const minimumDimension = Math.max(1, Math.min(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY));
   // The oriented run must be longer than a normal wall is thick; otherwise
@@ -945,7 +951,7 @@ export function inspectStructureEvidence(
   ));
   const wallThickness = clamp(weightedPercentile(rawSegments.filter((segment) => segment.to - segment.from >= minimumDimension * 0.1), 0.66), 2, minimumDimension * 0.07);
   const structural = structuralSegments(rawSegments, minimumDimension, wallThickness);
-  return { bounds, threshold, strongMask, mediumMask, rawSegments, wallThickness, structural, minimumDimension };
+  return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension };
 }
 
 export function detectFloorStructure(
@@ -954,14 +960,15 @@ export function detectFloorStructure(
   height: number,
   region: SourceRegion,
 ): DetectedStructure {
-  const { bounds, threshold, strongMask, mediumMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
+  const { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension } = inspectStructureEvidence(pixels, width, height, region);
   const thickCore = structural.filter((segment) => segment.thickness >= wallThickness * 0.62 || segment.to - segment.from >= minimumDimension * 0.3);
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
   const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
   const walls = recoverEmbeddedOpenings(
-    buildWalls(anchoredStructural, mediumMask, width, height, wallThickness, footprintBounds),
+    buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
     strongMask,
     mediumMask,
+    windowMask,
     width,
     height,
     footprintBounds,
