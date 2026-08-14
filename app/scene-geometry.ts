@@ -19,12 +19,28 @@ export type StairConnection = {
   id: string;
   lowerLevelId: string;
   upperLevelId: string;
-  start: [number, number];
-  end: [number, number];
   width: number;
-  stepCount: number;
-  fromElevation: number;
-  toElevation: number;
+  lowerFlight: {
+    start: [number, number];
+    end: [number, number];
+    fromElevation: number;
+    toElevation: number;
+    stepCount: number;
+  };
+  upperFlight: {
+    start: [number, number];
+    end: [number, number];
+    fromElevation: number;
+    toElevation: number;
+    stepCount: number;
+  };
+  landing: {
+    x: number;
+    z: number;
+    width: number;
+    depth: number;
+    elevation: number;
+  };
 };
 
 export type SceneFootprint = {
@@ -62,8 +78,8 @@ export function sceneFootprint(levels: Level[]): SceneFootprint {
 export function stairwellOpening(level: Level): StairwellOpening | null {
   const stair = [...(level.stairs ?? [])].sort((a, b) => b.confidence - a.confidence)[0];
   if (!stair) return null;
-  const width = clamp(stair.width * 0.7, 0.95, 1.65);
-  const depth = clamp(stair.depth * 0.68, 1.35, 2.35);
+  const width = clamp(stair.width * 1.1, 1.4, 2.8);
+  const depth = clamp(stair.depth * 0.94, 2, 3.25);
   const halfWidth = level.slab.width / 2;
   const halfDepth = level.slab.depth / 2;
   return {
@@ -96,10 +112,15 @@ export function slabPieces(level: Level, opening: StairwellOpening | null): Slab
   return pieces;
 }
 
-function stairEndpoint(stair: Stair, departure: boolean): [number, number] {
-  const direction = departure ? 1 : -1;
-  if (stair.runAxis === "vertical") return [stair.x, stair.z + direction * stair.depth * 0.42];
-  return [stair.x + direction * stair.width * 0.42, stair.z];
+function stairEnds(stair: Stair) {
+  if (stair.runAxis === "vertical") return {
+    front: [stair.x, stair.z + stair.depth * 0.42] as [number, number],
+    back: [stair.x, stair.z - stair.depth * 0.42] as [number, number],
+  };
+  return {
+    front: [stair.x + stair.width * 0.42, stair.z] as [number, number],
+    back: [stair.x - stair.width * 0.42, stair.z] as [number, number],
+  };
 }
 
 export function buildStairConnections(levels: Level[], explodeDistance = 0): StairConnection[] {
@@ -122,25 +143,43 @@ export function buildStairConnections(levels: Level[], explodeDistance = 0): Sta
     if (!pair) continue;
     const lowerCross = pair.lowerStair.runAxis === "vertical" ? pair.lowerStair.width : pair.lowerStair.depth;
     const upperCross = pair.upperStair.runAxis === "vertical" ? pair.upperStair.width : pair.upperStair.depth;
-    const start = stairEndpoint(pair.lowerStair, true);
-    const rawEnd = stairEndpoint(pair.upperStair, false);
-    const opening = stairwellOpening(upper.level);
-    const end: [number, number] = opening ? [
-      clamp(rawEnd[0], opening.x - opening.width * 0.42, opening.x + opening.width * 0.42),
-      clamp(rawEnd[1], opening.z - opening.depth * 0.42, opening.z + opening.depth * 0.42),
-    ] : rawEnd;
+    const lowerEnds = stairEnds(pair.lowerStair);
+    const upperEnds = stairEnds(pair.upperStair);
+    let lowerLanding = lowerEnds.back;
+    let upperLanding = upperEnds.back;
+    if (pair.lowerStair.runAxis === "vertical" && pair.upperStair.runAxis === "vertical") {
+      const landingZ = (lowerLanding[1] + upperLanding[1]) / 2;
+      lowerLanding = [lowerLanding[0], landingZ];
+      upperLanding = [upperLanding[0], landingZ];
+    } else if (pair.lowerStair.runAxis === "horizontal" && pair.upperStair.runAxis === "horizontal") {
+      const landingX = (lowerLanding[0] + upperLanding[0]) / 2;
+      lowerLanding = [landingX, lowerLanding[1]];
+      upperLanding = [landingX, upperLanding[1]];
+    }
     const fromElevation = lower.level.elevation + lower.index * explodeDistance + 0.06;
     const toElevation = upper.level.elevation + upper.index * explodeDistance + 0.04;
+    const landingElevation = (fromElevation + toElevation) / 2;
+    const lowerSteps = Math.round(clamp((landingElevation - fromElevation) / 0.19, 6, 11));
+    const upperSteps = Math.round(clamp((toElevation - landingElevation) / 0.19, 6, 11));
+    const verticalRun = pair.lowerStair.runAxis === "vertical";
+    const landingSpan = verticalRun
+      ? Math.abs(upperLanding[0] - lowerLanding[0]) + clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18)
+      : Math.abs(upperLanding[1] - lowerLanding[1]) + clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18);
+    const flightWidth = clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18);
     connections.push({
       id: `${lower.level.id}-to-${upper.level.id}`,
       lowerLevelId: lower.level.id,
       upperLevelId: upper.level.id,
-      start,
-      end,
-      width: clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18),
-      stepCount: Math.round(clamp((toElevation - fromElevation) / 0.19, 12, 20)),
-      fromElevation,
-      toElevation,
+      width: flightWidth,
+      lowerFlight: { start: lowerEnds.front, end: lowerLanding, fromElevation, toElevation: landingElevation, stepCount: lowerSteps },
+      upperFlight: { start: upperLanding, end: upperEnds.front, fromElevation: landingElevation, toElevation, stepCount: upperSteps },
+      landing: {
+        x: (lowerLanding[0] + upperLanding[0]) / 2,
+        z: (lowerLanding[1] + upperLanding[1]) / 2,
+        width: verticalRun ? landingSpan : flightWidth * 1.08,
+        depth: verticalRun ? flightWidth * 1.08 : landingSpan,
+        elevation: landingElevation,
+      },
     });
   }
   return connections;
