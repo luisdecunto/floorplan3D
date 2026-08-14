@@ -88,6 +88,16 @@ if (!manifest) {
         assert.equal(bottomPlan.stairs.length, 1, "ground-floor stair symbol should be retained");
         assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
         assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
+        const balconyWall = topPlan.walls.find((wall) => (
+          wall.axis === "horizontal"
+          && Math.abs(wall.start[1] - (topPlan.footprint.y + topPlan.footprint.height)) <= topPlan.diagnostics.wallThickness * 2
+        ));
+        assert.ok(balconyWall, "the first-floor balcony edge should be part of the wall network");
+        const balconyAccess = [...balconyWall.openings].sort((a, b) => {
+          const wallCenter = Math.hypot(balconyWall.end[0] - balconyWall.start[0], balconyWall.end[1] - balconyWall.start[1]) / 2;
+          return Math.abs(a.offset + a.width / 2 - wallCenter) - Math.abs(b.offset + b.width / 2 - wallCenter);
+        })[0];
+        assert.equal(balconyAccess?.kind, "door", "the central balcony access symbol should become a door, not a window");
         const bedroomDoorWall = topPlan.walls.find((wall) => {
           const normalizedX = (wall.start[0] - topPlan.footprint.x) / topPlan.footprint.width;
           return wall.axis === "vertical"
@@ -96,6 +106,18 @@ if (!manifest) {
             && wall.openings.some((opening) => opening.kind === "door");
         });
         assert.ok(bedroomDoorWall, "the short wall fragment beside the first-floor bedroom door should survive topology filtering");
+        const entranceBedroomWall = bottomPlan.walls.find((wall) => {
+          const normalizedX = (wall.start[0] - bottomPlan.footprint.x) / bottomPlan.footprint.width;
+          const normalizedStartY = (Math.min(wall.start[1], wall.end[1]) - bottomPlan.footprint.y) / bottomPlan.footprint.height;
+          const normalizedEndY = (Math.max(wall.start[1], wall.end[1]) - bottomPlan.footprint.y) / bottomPlan.footprint.height;
+          return wall.axis === "vertical"
+            && normalizedX > 0.55
+            && normalizedX < 0.7
+            && normalizedStartY < 0.45
+            && normalizedEndY > 0.68
+            && wall.openings.some((opening) => opening.kind === "door");
+        });
+        assert.ok(entranceBedroomWall, "the wall between the entrance hallway and bedroom should survive across its doorway gap");
         const fakeOpenSpaceDivider = topPlan.walls.find((wall) => (
           wall.axis === "horizontal"
           && wall.start[1] > topPlan.footprint.y + topPlan.footprint.height * 0.35

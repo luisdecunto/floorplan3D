@@ -425,8 +425,20 @@ function structuralSegments(segments: Segment[], minimumDimension: number, wallT
   return initial.filter((segment) => {
     const length = segment.to - segment.from;
     const connected = initial.some((other) => other !== segment && segmentsIntersect(segment, other, Math.max(3, wallThickness * 0.8)));
+    const collinearDoorwayContinuation = initial.some((other) => {
+      if (other === segment || other.axis !== segment.axis) return false;
+      if (Math.abs(other.line - segment.line) > Math.max(3, wallThickness * 0.7)) return false;
+      const gap = Math.max(segment.from, other.from) - Math.min(segment.to, other.to);
+      if (gap < 0 || gap > Math.max(16, minimumDimension * 0.14)) return false;
+      const otherLength = other.to - other.from;
+      const longEnoughPair = Math.max(length, otherLength) >= minimumDimension * 0.24;
+      return longEnoughPair
+        && length >= minimumDimension * 0.09
+        && segment.thickness >= wallThickness * 0.45;
+    });
     return length >= minimumDimension * 0.32
       || connected
+      || collinearDoorwayContinuation
       || (segment.thickness >= wallThickness * 0.72 && length >= minimumDimension * 0.13);
   });
 }
@@ -904,6 +916,63 @@ function recoverEmbeddedOpenings(
       }
     }
     return { ...wall, openings: openings.sort((a, b) => a.offset - b.offset) };
+  });
+}
+
+function promoteOutdoorAccessDoors(
+  walls: DetectedWall[],
+  outdoorAreas: DetectedOutdoorArea[],
+  footprint: Bounds,
+) {
+  if (!outdoorAreas.length) return walls;
+  return walls.map((wall) => {
+    const wallFrom = wall.axis === "horizontal" ? wall.start[0] : wall.start[1];
+    const wallTo = wall.axis === "horizontal" ? wall.end[0] : wall.end[1];
+    const wallLine = wall.axis === "horizontal" ? wall.start[1] : wall.start[0];
+    const wallLength = Math.max(1, wallTo - wallFrom);
+    const candidates: Array<{ area: DetectedOutdoorArea; openingIndex: number; score: number }> = [];
+
+    outdoorAreas.forEach((area) => {
+      const isHorizontalAccess = wall.axis === "horizontal" && (area.side === "top" || area.side === "bottom");
+      const isVerticalAccess = wall.axis === "vertical" && (area.side === "left" || area.side === "right");
+      if (!isHorizontalAccess && !isVerticalAccess) return;
+
+      const edge = area.side === "top"
+        ? footprint.minY
+        : area.side === "bottom"
+          ? footprint.maxY
+          : area.side === "left"
+            ? footprint.minX
+            : footprint.maxX;
+      if (Math.abs(wallLine - edge) > Math.max(8, wall.thickness * 2.4)) return;
+
+      const areaFrom = isHorizontalAccess ? area.x : area.y;
+      const areaTo = isHorizontalAccess ? area.x + area.width : area.y + area.height;
+      const areaCenter = (areaFrom + areaTo) / 2;
+      wall.openings.forEach((opening, openingIndex) => {
+        const openingFrom = wallFrom + opening.offset;
+        const openingTo = openingFrom + opening.width;
+        const overlap = Math.max(0, Math.min(openingTo, areaTo) - Math.max(openingFrom, areaFrom));
+        if (overlap < Math.min(opening.width, areaTo - areaFrom) * 0.35) return;
+        const openingCenter = (openingFrom + openingTo) / 2;
+        candidates.push({
+          area,
+          openingIndex,
+          score: Math.abs(openingCenter - areaCenter) / wallLength,
+        });
+      });
+    });
+
+    const best = candidates.sort((a, b) => a.score - b.score)[0];
+    if (!best) return wall;
+    return {
+      ...wall,
+      openings: wall.openings.map((opening, index) => (
+        index === best.openingIndex
+          ? { ...opening, kind: "door" as const, confidence: Math.max(opening.confidence, Math.min(0.9, best.area.confidence + 0.04)) }
+          : opening
+      )),
+    };
   });
 }
 
@@ -1421,7 +1490,8 @@ export function detectFloorStructure(
   const thickCore = structural.filter((segment) => segment.thickness >= wallThickness * 0.62 || segment.to - segment.from >= minimumDimension * 0.3);
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
   const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
-  const walls = recoverEmbeddedOpenings(
+  const outdoorAreas = detectOutdoorAreas(rawSegments, footprintBounds, wallThickness);
+  const walls = promoteOutdoorAccessDoors(recoverEmbeddedOpenings(
     trimUnsupportedInteriorWallTails(
       buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
       strongMask,
@@ -1436,8 +1506,7 @@ export function detectFloorStructure(
     width,
     height,
     footprintBounds,
-  );
-  const outdoorAreas = detectOutdoorAreas(rawSegments, footprintBounds, wallThickness);
+  ), outdoorAreas, footprintBounds);
   const stairs = detectStairs(rawSegments, mediumMask, width, height, footprintBounds, minimumDimension, wallThickness);
   const openingCount = walls.reduce((sum, wall) => sum + wall.openings.length, 0);
   const topologyVotes = walls.filter((wall) => walls.some((other) => other !== wall && (
