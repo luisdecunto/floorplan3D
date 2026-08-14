@@ -42,3 +42,4 @@ yarn-error.log*
 /work/
 /planform-site.zip
 /tests/fixtures/floorplans/
+/.codex-remote-attachments/
