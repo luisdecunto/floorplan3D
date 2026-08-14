@@ -3,13 +3,14 @@ import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const outputDirectory = new URL("../pages-dist/", import.meta.url);
+const expectedBasePath = process.env.PAGES_BASE_PATH ?? "/floorplan3D/";
 
 test("GitHub Pages build contains the Planform application shell", async () => {
   const html = await readFile(new URL("index.html", outputDirectory), "utf8");
 
   assert.match(html, /<title>Planform/);
   assert.match(html, /id="root"/);
-  assert.match(html, /\/floorplan3D\/assets\//);
+  assert.ok(html.includes(`${expectedBasePath}assets/`), `expected assets below ${expectedBasePath}`);
   assert.doesNotMatch(html, /_next|_vinext|chatgpt\.site/);
 });
 
