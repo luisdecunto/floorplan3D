@@ -30,6 +30,7 @@ export default function TwinViewer({
 }) {
   const explodeDistance = exploded ? 2.35 : 0;
   const stairConnections = buildStairConnections(levels, explodeDistance);
+  const stairOpenings = new Map(stairConnections.map((connection) => [connection.upperLevelId, connection.opening]));
   const footprint = sceneFootprint(levels);
   return (
     <div className="twin-canvas">
@@ -42,7 +43,7 @@ export default function TwinViewer({
             <LevelModel
               key={level.id}
               level={level}
-              opening={index > 0 ? stairwellOpening(level) : null}
+              opening={index > 0 ? stairOpenings.get(level.id) ?? stairwellOpening(level) : null}
               explodeOffset={index * explodeDistance}
               wallOpacity={wallOpacity}
             />

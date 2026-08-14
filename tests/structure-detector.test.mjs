@@ -121,8 +121,24 @@ test("half-paced stairs use opposing flights, a half-height landing and an upper
   assert.ok(connections[0].landing.elevation > 1.5 && connections[0].landing.elevation < 1.65);
   assert.ok(connections[0].upperFlight.toElevation > 3 && connections[0].upperFlight.toElevation < 3.1);
 
-  const opening = stairwellOpening(upper);
+  const opening = connections[0].opening;
   assert.ok(opening);
+  assert.equal(opening.x, stairwellOpening(upper).x, "the stairs should use the opening detected on the upper-floor plan");
+  assert.ok(Math.abs((connections[0].lowerFlight.start[0] + connections[0].upperFlight.end[0]) / 2 - opening.x) < 0.0001, "the two flights should be centered in the plan opening");
+  const openingLeft = opening.x - opening.width / 2;
+  const openingRight = opening.x + opening.width / 2;
+  const openingBack = opening.z - opening.depth / 2;
+  const openingFront = opening.z + opening.depth / 2;
+  assert.ok(connections[0].landing.x - connections[0].landing.width / 2 >= openingLeft);
+  assert.ok(connections[0].landing.x + connections[0].landing.width / 2 <= openingRight);
+  assert.ok(connections[0].landing.z - connections[0].landing.depth / 2 >= openingBack, "the landing must not project through the rear wall");
+  assert.ok(connections[0].landing.z + connections[0].landing.depth / 2 <= openingFront);
+  for (const flight of [connections[0].lowerFlight, connections[0].upperFlight]) {
+    for (const [x, z] of [flight.start, flight.end]) {
+      assert.ok(x - connections[0].width / 2 >= openingLeft && x + connections[0].width / 2 <= openingRight);
+      assert.ok(z >= openingBack && z <= openingFront);
+    }
+  }
   const pieces = slabPieces(upper, opening);
   assert.equal(pieces.length, 4);
   const remainingArea = pieces.reduce((sum, piece) => sum + piece.width * piece.depth, 0);

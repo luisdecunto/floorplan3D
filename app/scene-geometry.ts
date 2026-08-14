@@ -19,6 +19,7 @@ export type StairConnection = {
   id: string;
   lowerLevelId: string;
   upperLevelId: string;
+  opening: StairwellOpening;
   width: number;
   lowerFlight: {
     start: [number, number];
@@ -145,39 +146,60 @@ export function buildStairConnections(levels: Level[], explodeDistance = 0): Sta
     const upperCross = pair.upperStair.runAxis === "vertical" ? pair.upperStair.width : pair.upperStair.depth;
     const lowerEnds = stairEnds(pair.lowerStair);
     const upperEnds = stairEnds(pair.upperStair);
-    let lowerLanding = lowerEnds.back;
-    let upperLanding = upperEnds.back;
-    if (pair.lowerStair.runAxis === "vertical" && pair.upperStair.runAxis === "vertical") {
-      const landingZ = (lowerLanding[1] + upperLanding[1]) / 2;
-      lowerLanding = [lowerLanding[0], landingZ];
-      upperLanding = [upperLanding[0], landingZ];
-    } else if (pair.lowerStair.runAxis === "horizontal" && pair.upperStair.runAxis === "horizontal") {
-      const landingX = (lowerLanding[0] + upperLanding[0]) / 2;
-      lowerLanding = [landingX, lowerLanding[1]];
-      upperLanding = [landingX, upperLanding[1]];
-    }
+    const opening = stairwellOpening(upper.level);
+    if (!opening) continue;
     const fromElevation = lower.level.elevation + lower.index * explodeDistance + 0.06;
     const toElevation = upper.level.elevation + upper.index * explodeDistance + 0.04;
     const landingElevation = (fromElevation + toElevation) / 2;
     const lowerSteps = Math.round(clamp((landingElevation - fromElevation) / 0.19, 6, 11));
     const upperSteps = Math.round(clamp((toElevation - landingElevation) / 0.19, 6, 11));
-    const verticalRun = pair.lowerStair.runAxis === "vertical";
-    const landingSpan = verticalRun
-      ? Math.abs(upperLanding[0] - lowerLanding[0]) + clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18)
-      : Math.abs(upperLanding[1] - lowerLanding[1]) + clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18);
-    const flightWidth = clamp(Math.min(lowerCross, upperCross) * 0.5, 0.78, 1.18);
+    const verticalRun = pair.lowerStair.runAxis === "vertical" && pair.upperStair.runAxis === "vertical";
+    const clearance = 0.08;
+    const crossSize = verticalRun ? opening.width : opening.depth;
+    const runSize = verticalRun ? opening.depth : opening.width;
+    const availableCross = Math.max(1.16, crossSize - clearance * 2);
+    const baseFlightWidth = clamp(Math.min(lowerCross, upperCross) * 0.5, 0.72, 1.18);
+    const flightWidth = Math.max(0.56, Math.min(baseFlightWidth, availableCross / 2));
+    const detectedSeparation = verticalRun
+      ? Math.abs(lowerEnds.front[0] - upperEnds.front[0])
+      : Math.abs(lowerEnds.front[1] - upperEnds.front[1]);
+    const desiredSeparation = detectedSeparation > flightWidth * 0.35 ? detectedSeparation : flightWidth * 0.96;
+    const laneSeparation = clamp(desiredSeparation, flightWidth * 0.72, Math.max(flightWidth * 0.72, availableCross - flightWidth));
+    const laneDirection = verticalRun
+      ? Math.sign(lowerEnds.front[0] - upperEnds.front[0]) || 1
+      : Math.sign(lowerEnds.front[1] - upperEnds.front[1]) || 1;
+    const crossCenter = verticalRun ? opening.x : opening.z;
+    const lowerLane = crossCenter + laneDirection * laneSeparation / 2;
+    const upperLane = crossCenter - laneDirection * laneSeparation / 2;
+    const landingRun = Math.min(flightWidth * 1.08, Math.max(0.62, runSize * 0.34));
+    const openingRear = verticalRun ? opening.z - opening.depth / 2 : opening.x - opening.width / 2;
+    const openingFront = verticalRun ? opening.z + opening.depth / 2 : opening.x + opening.width / 2;
+    const landingRear = openingRear + clearance;
+    const landingCenter = landingRear + landingRun / 2;
+    const landingJoint = landingRear + landingRun;
+    const flightFrontLimit = openingFront - clearance;
+    const minimumRun = Math.min(0.48, Math.max(0.24, (flightFrontLimit - landingJoint) * 0.3));
+    const fitFront = (value: number) => clamp(value, landingJoint + minimumRun, flightFrontLimit);
+    const lowerFront = fitFront(verticalRun ? lowerEnds.front[1] : lowerEnds.front[0]);
+    const upperFront = fitFront(verticalRun ? upperEnds.front[1] : upperEnds.front[0]);
+    const lowerStart: [number, number] = verticalRun ? [lowerLane, lowerFront] : [lowerFront, lowerLane];
+    const lowerLanding: [number, number] = verticalRun ? [lowerLane, landingJoint] : [landingJoint, lowerLane];
+    const upperLanding: [number, number] = verticalRun ? [upperLane, landingJoint] : [landingJoint, upperLane];
+    const upperEnd: [number, number] = verticalRun ? [upperLane, upperFront] : [upperFront, upperLane];
+    const landingSpan = laneSeparation + flightWidth;
     connections.push({
       id: `${lower.level.id}-to-${upper.level.id}`,
       lowerLevelId: lower.level.id,
       upperLevelId: upper.level.id,
+      opening,
       width: flightWidth,
-      lowerFlight: { start: lowerEnds.front, end: lowerLanding, fromElevation, toElevation: landingElevation, stepCount: lowerSteps },
-      upperFlight: { start: upperLanding, end: upperEnds.front, fromElevation: landingElevation, toElevation, stepCount: upperSteps },
+      lowerFlight: { start: lowerStart, end: lowerLanding, fromElevation, toElevation: landingElevation, stepCount: lowerSteps },
+      upperFlight: { start: upperLanding, end: upperEnd, fromElevation: landingElevation, toElevation, stepCount: upperSteps },
       landing: {
-        x: (lowerLanding[0] + upperLanding[0]) / 2,
-        z: (lowerLanding[1] + upperLanding[1]) / 2,
-        width: verticalRun ? landingSpan : flightWidth * 1.08,
-        depth: verticalRun ? flightWidth * 1.08 : landingSpan,
+        x: verticalRun ? crossCenter : landingCenter,
+        z: verticalRun ? landingCenter : crossCenter,
+        width: verticalRun ? landingSpan : landingRun,
+        depth: verticalRun ? landingRun : landingSpan,
         elevation: landingElevation,
       },
     });
