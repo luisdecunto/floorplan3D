@@ -986,6 +986,77 @@ function stairCrossStrokeCenters(
   return centers;
 }
 
+export function expandDetectedStairReturn(
+  stair: DetectedStair,
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  footprint: { x: number; y: number; width: number; height: number },
+  wallThickness: number,
+) {
+  const vertical = stair.runAxis === "vertical";
+  const crossLength = vertical ? stair.width : stair.height;
+  const runLength = vertical ? stair.height : stair.width;
+  const stairCrossCenter = vertical ? stair.x + stair.width / 2 : stair.y + stair.height / 2;
+  const footprintCrossCenter = vertical ? footprint.x + footprint.width / 2 : footprint.y + footprint.height / 2;
+  // A complete half-turn shaft is normally centered even when the parallel
+  // flight detected from its regular treads is not. Avoid altering already
+  // centered shaft detections.
+  if (Math.abs(stairCrossCenter - footprintCrossCenter) <= crossLength * 0.12) return stair;
+
+  const direction = stairCrossCenter > footprintCrossCenter ? -1 : 1;
+  const footprintCrossLength = vertical ? footprint.width : footprint.height;
+  const maximumDistance = Math.floor(Math.min(crossLength * 0.9, runLength * 0.58, footprintCrossLength * 0.2));
+  const runStart = Math.round((vertical ? stair.y : stair.x) + runLength * 0.09);
+  const runEnd = Math.round((vertical ? stair.y + stair.height : stair.x + stair.width) - runLength * 0.09);
+  const boundary = direction < 0
+    ? Math.floor(vertical ? stair.x : stair.y) - 1
+    : Math.ceil(vertical ? stair.x + stair.width : stair.y + stair.height) + 1;
+  const gapAllowance = Math.max(2, Math.ceil(wallThickness * 0.48));
+  const span = Math.max(1, runEnd - runStart + 1);
+  let gaps = 0;
+  let farthestEvidence = 0;
+
+  for (let distance = 1; distance <= maximumDistance; distance += 1) {
+    const cross = boundary + direction * (distance - 1);
+    let hits = 0;
+    for (let run = runStart; run <= runEnd; run += 1) {
+      const x = vertical ? cross : run;
+      const y = vertical ? run : cross;
+      if (x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x]) hits += 1;
+    }
+    // Return flights and winders contribute short connected strokes. Solid
+    // wall columns/rows are deliberately rejected here.
+    const active = hits >= 2 && hits <= span * 0.52;
+    if (active) {
+      farthestEvidence = distance;
+      gaps = 0;
+    } else {
+      gaps += 1;
+      if (gaps > gapAllowance) break;
+    }
+  }
+
+  const minimumExpansion = Math.max(3, crossLength * 0.16);
+  const maximumShaftCross = footprintCrossLength * 0.36;
+  const expansion = Math.min(farthestEvidence, Math.max(0, maximumShaftCross - crossLength));
+  if (expansion < minimumExpansion) return stair;
+  if (vertical) {
+    return {
+      ...stair,
+      x: direction < 0 ? stair.x - expansion : stair.x,
+      width: stair.width + expansion,
+      confidence: Math.min(0.92, stair.confidence + 0.04),
+    };
+  }
+  return {
+    ...stair,
+    y: direction < 0 ? stair.y - expansion : stair.y,
+    height: stair.height + expansion,
+    confidence: Math.min(0.92, stair.confidence + 0.04),
+  };
+}
+
 function detectStairs(
   rawSegments: Segment[],
   mediumMask: Uint8Array,
@@ -1059,8 +1130,14 @@ function detectStairs(
       }];
     })
     .sort((a, b) => b.confidence - a.confidence);
+  const expanded = detected.map((stair) => expandDetectedStairReturn(stair, mediumMask, width, height, {
+    x: footprint.minX,
+    y: footprint.minY,
+    width: footprint.maxX - footprint.minX,
+    height: footprint.maxY - footprint.minY,
+  }, wallThickness));
   const unique: DetectedStair[] = [];
-  detected.forEach((stair) => {
+  expanded.forEach((stair) => {
     const duplicate = unique.some((candidate) => {
       if (candidate.runAxis !== stair.runAxis) return false;
       const intersectionWidth = Math.max(0, Math.min(candidate.x + candidate.width, stair.x + stair.width) - Math.max(candidate.x, stair.x));

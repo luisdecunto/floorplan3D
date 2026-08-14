@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildStairConnections, sceneFootprint, slabPieces, slabPieceTextureUv, stairwellOpening } from "../app/scene-geometry.ts";
-import { alignAdjacentStairStructures, detectFloorStructure, structureToLevel } from "../app/structure-detector.ts";
+import { alignAdjacentStairStructures, detectFloorStructure, expandDetectedStairReturn, structureToLevel } from "../app/structure-detector.ts";
 
 function syntheticPlan() {
   const width = 240;
@@ -106,6 +106,24 @@ test("adjacent floors share the upper-floor stair shaft in analyser coordinates"
   const upperCenter = (upperBox.x + upperBox.width / 2 - upper.footprint.x) / upper.footprint.width;
   assert.ok(Math.abs(lowerCenter - upperCenter) < 0.0001);
   assert.ok(Math.abs(lowerBox.width / lower.footprint.width - upperBox.width / upper.footprint.width) < 0.0001);
+});
+
+test("a right-hand flight expands left across connected return-flight evidence", () => {
+  const width = 240;
+  const height = 190;
+  const mask = new Uint8Array(width * height);
+  const point = (x, y) => { mask[y * width + x] = 1; };
+  // Two short curved/winder traces continue from the detected flight toward
+  // the building centre without forming a solid wall column.
+  for (let x = 104; x <= 130; x += 1) {
+    const progress = (130 - x) / 26;
+    point(x, Math.round(63 + progress * 14));
+    point(x, Math.round(83 - progress * 10));
+  }
+  const stair = { id: "right-flight", runAxis: "vertical", x: 131, y: 48, width: 31, height: 74, stepCount: 10, confidence: 0.78 };
+  const expanded = expandDetectedStairReturn(stair, mask, width, height, { x: 20, y: 18, width: 200, height: 154 }, 5);
+  assert.ok(expanded.x <= 106, "the shaft should include the left-hand return flight");
+  assert.ok(expanded.width >= 56, "the shaft should cover both halves rather than shifting one flight");
 });
 
 test("half-paced stairs use opposing flights, a half-height landing and an upper slab opening", () => {
