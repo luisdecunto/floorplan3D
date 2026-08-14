@@ -52,7 +52,7 @@ import {
   undoLastDocumentEdit,
   type FloorplanDocumentV2,
 } from "./floorplan-document";
-import { downloadProject, parseProject, saveProjectLocally } from "./project-storage";
+import { downloadProject, loadLatestProjectLocally, parseProject, saveProjectLocally } from "./project-storage";
 import {
   alignAdjacentStairStructures,
   detectFloorStructures,
@@ -164,6 +164,7 @@ export default function Home() {
   const [analysisStep, setAnalysisStep] = useState(0);
   const [mobilePanel, setMobilePanel] = useState<"levels" | "canvas" | "details">("canvas");
   const [document, setDocument] = useState<FloorplanDocumentV2 | null>(null);
+  const [lastProject, setLastProject] = useState<FloorplanDocumentV2 | null>(null);
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
   const [projectMessage, setProjectMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -176,9 +177,15 @@ export default function Home() {
   }, [imageUrl]);
 
   useEffect(() => {
+    loadLatestProjectLocally().then(setLastProject).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (!document) return;
     const timeout = window.setTimeout(() => {
-      saveProjectLocally(document).catch(() => setProjectMessage("Local save is unavailable in this browser."));
+      saveProjectLocally(document)
+        .then(() => setLastProject(document))
+        .catch(() => setProjectMessage("Local save is unavailable in this browser."));
     }, 220);
     return () => window.clearTimeout(timeout);
   }, [document]);
@@ -259,6 +266,18 @@ export default function Home() {
     } finally {
       event.target.value = "";
     }
+  }
+
+  function openProject(project: FloorplanDocumentV2) {
+    setDocument(project);
+    setRegions(documentRegions(project));
+    setStructures(documentStructures(project));
+    setAnalysisSize({ width: project.source.width, height: project.source.height });
+    setActiveLevel(project.levels[0].id);
+    setVisibleLevels(new Set(project.levels.map((level) => level.id)));
+    setSelectedWallId(null);
+    setProjectMessage("Local project restored.");
+    setStage("workspace");
   }
 
   function removeSelectedWall() {
@@ -488,6 +507,12 @@ export default function Home() {
             <button className="sample-action import-project-action" onClick={() => projectInputRef.current?.click()}>
               <Upload size={13} /> Import a V2 project
             </button>
+            {lastProject && (
+              <button className="resume-project-action" onClick={() => openProject(lastProject)}>
+                <span><strong>Continue {lastProject.name}</strong><small>Saved {new Date(lastProject.updatedAt).toLocaleString()}</small></span>
+                <ArrowRight size={16} />
+              </button>
+            )}
             {projectMessage && <p className="project-message">{projectMessage}</p>}
             <p className="privacy-note"><ShieldCheck size={13} /> Analysis and project storage stay on this device.</p>
           </div>

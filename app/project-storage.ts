@@ -27,6 +27,21 @@ export async function saveProjectLocally(document: FloorplanDocumentV2) {
   database.close();
 }
 
+export async function loadLatestProjectLocally() {
+  if (typeof indexedDB === "undefined") return null;
+  const database = await openDatabase();
+  const projects = await new Promise<FloorplanDocumentV2[]>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    const request = transaction.objectStore(STORE_NAME).getAll();
+    request.onsuccess = () => resolve(request.result as FloorplanDocumentV2[]);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return projects
+    .map((project) => validateFloorplanDocument(project))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+}
+
 export function serializeProject(document: FloorplanDocumentV2) {
   return JSON.stringify(document, null, 2);
 }

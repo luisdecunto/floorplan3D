@@ -357,6 +357,22 @@ select:focus-visible {
   line-height: 1.45;
 }
 
+.resume-project-action {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #aab897;
+  background: #f3f8e8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  cursor: pointer;
+}
+.resume-project-action > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.resume-project-action strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
+.resume-project-action small { font-size: 8px; color: var(--muted); }
+
 .privacy-note {
   margin: 11px 0 0;
   display: flex;
