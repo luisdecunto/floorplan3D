@@ -414,7 +414,11 @@ function structuralSegments(segments: Segment[], minimumDimension: number, wallT
   const minimumThickness = Math.max(2, wallThickness * 0.32);
   const initial = segments.filter((segment) => (
     segment.thickness >= minimumThickness
-    && segment.to - segment.from >= minimumDimension * 0.075
+    // Short wall fragments immediately beside a doorway are structural when
+    // they are thick and connect to a perpendicular partition. A 7.5% cutoff
+    // dropped these fragments in tall phone screenshots whose paper bounds
+    // include UI chrome; 6% retains them for the topology vote below.
+    && segment.to - segment.from >= minimumDimension * 0.06
     && segment.density >= 0.32
   ));
 

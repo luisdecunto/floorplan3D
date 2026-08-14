@@ -88,6 +88,14 @@ if (!manifest) {
         assert.equal(bottomPlan.stairs.length, 1, "ground-floor stair symbol should be retained");
         assert.ok(topPlan.walls.flatMap((wall) => wall.openings).some((opening) => opening.kind === "door"));
         assert.ok(bottomPlan.walls.flatMap((wall) => wall.openings).filter((opening) => opening.kind === "door").length >= 2);
+        const bedroomDoorWall = topPlan.walls.find((wall) => {
+          const normalizedX = (wall.start[0] - topPlan.footprint.x) / topPlan.footprint.width;
+          return wall.axis === "vertical"
+            && normalizedX > 0.25
+            && normalizedX < 0.5
+            && wall.openings.some((opening) => opening.kind === "door");
+        });
+        assert.ok(bedroomDoorWall, "the short wall fragment beside the first-floor bedroom door should survive topology filtering");
         const fakeOpenSpaceDivider = topPlan.walls.find((wall) => (
           wall.axis === "horizontal"
           && wall.start[1] > topPlan.footprint.y + topPlan.footprint.height * 0.35
