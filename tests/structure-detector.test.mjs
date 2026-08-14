@@ -55,6 +55,41 @@ test("thick strokes, door evidence and an exterior rail become structure", () =>
   assert.ok(structure.confidence >= 0.65);
 });
 
+test("a thin dimension line cannot extend a real partition across an open room", () => {
+  const width = 240;
+  const height = 190;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const rectangle = (x1, y1, x2, y2, value = 0) => {
+    for (let y = y1; y <= y2; y += 1) {
+      for (let x = x1; x <= x2; x += 1) {
+        const index = (y * width + x) * 4;
+        pixels[index] = value;
+        pixels[index + 1] = value;
+        pixels[index + 2] = value;
+        pixels[index + 3] = 255;
+      }
+    }
+  };
+
+  rectangle(25, 20, 215, 26);
+  rectangle(25, 20, 31, 168);
+  rectangle(209, 20, 215, 168);
+  rectangle(25, 162, 215, 168);
+  rectangle(28, 77, 95, 83);
+  rectangle(96, 80, 210, 80); // collinear measurement line, not structure
+
+  const region = { id: "level-a", name: "First floor", x: 0, y: 0, width: 1, height: 1, confidence: 0.9 };
+  const structure = detectFloorStructure(pixels, width, height, region);
+  const partition = structure.walls.find((wall) => (
+    wall.axis === "horizontal"
+    && Math.abs(wall.start[1] - 80) <= 4
+    && wall.start[0] <= 35
+  ));
+
+  assert.ok(partition, "the genuine thick partition should remain detected");
+  assert.ok(partition.end[0] <= 100, `dimension line must be trimmed; received end x=${partition.end[0]}`);
+});
+
 test("detected pixel geometry is converted into a non-sample 3D level", () => {
   const { pixels, width, height } = syntheticPlan();
   const region = { id: "level-a", name: "First floor", x: 0, y: 0, width: 1, height: 1, confidence: 0.9, hasOutdoorArea: true };
