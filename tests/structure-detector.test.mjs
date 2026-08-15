@@ -42,6 +42,31 @@ function syntheticPlan() {
   return { pixels, width, height };
 }
 
+function rotatePlan({ pixels, width, height }, degrees) {
+  const rotated = new Uint8ClampedArray(width * height * 4).fill(255);
+  const radians = degrees * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const centerX = (width - 1) / 2;
+  const centerY = (height - 1) / 2;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x - centerX;
+      const dy = y - centerY;
+      const sourceX = Math.round(centerX + dx * cosine + dy * sine);
+      const sourceY = Math.round(centerY - dx * sine + dy * cosine);
+      if (sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height) continue;
+      const sourceIndex = (sourceY * width + sourceX) * 4;
+      const destinationIndex = (y * width + x) * 4;
+      rotated[destinationIndex] = pixels[sourceIndex];
+      rotated[destinationIndex + 1] = pixels[sourceIndex + 1];
+      rotated[destinationIndex + 2] = pixels[sourceIndex + 2];
+      rotated[destinationIndex + 3] = pixels[sourceIndex + 3];
+    }
+  }
+  return { pixels: rotated, width, height };
+}
+
 test("thick strokes, door evidence and an exterior rail become structure", () => {
   const { pixels, width, height } = syntheticPlan();
   const region = { id: "level-a", name: "First floor", x: 0, y: 0, width: 1, height: 1, confidence: 0.9, hasOutdoorArea: true };
@@ -53,6 +78,19 @@ test("thick strokes, door evidence and an exterior rail become structure", () =>
   assert.equal(structure.outdoorAreas.length, 1);
   assert.equal(structure.outdoorAreas[0].side, "bottom");
   assert.ok(structure.confidence >= 0.65);
+});
+
+test("walls and swing-door symbols survive a rotated source plan", () => {
+  const { pixels, width, height } = rotatePlan(syntheticPlan(), 11);
+  const region = { id: "level-rotated", name: "Rotated plan", x: 0, y: 0, width: 1, height: 1, confidence: 0.9, hasOutdoorArea: true };
+  const structure = detectFloorStructure(pixels, width, height, region);
+  const symbolDoors = structure.walls
+    .flatMap((wall) => wall.openings)
+    .filter((opening) => opening.kind === "door" && opening.evidence === "symbol");
+
+  assert.ok(Math.abs(Math.abs(structure.sourceRotationDegrees ?? 0) - 11) <= 2, `expected about 11° correction, received ${structure.sourceRotationDegrees}`);
+  assert.ok(structure.walls.length >= 6, `rotated plan should retain its wall network; received ${structure.walls.length}`);
+  assert.ok(symbolDoors.length >= 1, "a rotated swing glyph should still be recognized as a symbol-supported door");
 });
 
 test("a thin dimension line cannot extend a real partition across an open room", () => {

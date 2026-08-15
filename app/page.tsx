@@ -110,7 +110,17 @@ async function inspectFloorplan(url: string): Promise<{ regions: SourceRegion[];
       const floorCanvas = document.createElement("canvas");
       floorCanvas.width = cropWidth;
       floorCanvas.height = cropHeight;
-      floorCanvas.getContext("2d")?.drawImage(canvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      const floorContext = floorCanvas.getContext("2d");
+      if (floorContext) {
+        floorContext.translate(-cropX, -cropY);
+        if (structure.sourceRotationDegrees && structure.rotationCenter) {
+          const [centerX, centerY] = structure.rotationCenter;
+          floorContext.translate(centerX, centerY);
+          floorContext.rotate(-structure.sourceRotationDegrees * Math.PI / 180);
+          floorContext.translate(-centerX, -centerY);
+        }
+        floorContext.drawImage(canvas, 0, 0);
+      }
       structure.floorTextureUrl = floorCanvas.toDataURL("image/jpeg", 0.86);
     });
     regions = regions.map((region) => ({
@@ -765,7 +775,7 @@ function Workspace({
                 {(structures[activeLevel]?.walls ?? []).map((wall, index) => (
                   <button key={wall.id} onClick={() => setSelectedWallId(wall.id)}>
                     <span>{index + 1}</span>
-                    <strong>{wall.axis === "horizontal" ? "Horizontal" : "Vertical"} wall</strong>
+                    <strong>Detected wall</strong>
                     <em>{Math.round(wall.confidence * 100)}%</em>
                   </button>
                 ))}
@@ -776,7 +786,7 @@ function Workspace({
           {selectedWall && (
             <div className="detail-section selected-wall-card">
               <span className="detail-label">Selected boundary</span>
-              <strong>{selectedWall.axis === "horizontal" ? "Horizontal" : "Vertical"} wall · {Math.round(selectedWall.confidence * 100)}% evidence</strong>
+              <strong>Detected wall · {Math.round(selectedWall.confidence * 100)}% evidence</strong>
               <p>If this line is furniture, a dimension, or an open boundary, mark it as open. The original proposal remains in edit history.</p>
               <div className="opening-actions">
                 <button onClick={() => addOpening("door")}>Add door</button>
@@ -893,10 +903,19 @@ function PlanReview({
               y={area.y}
               width={area.width}
               height={area.height}
+              transform={structures[region.id]?.sourceRotationDegrees && structures[region.id]?.rotationCenter
+                ? `rotate(${structures[region.id].sourceRotationDegrees} ${structures[region.id].rotationCenter?.[0]} ${structures[region.id].rotationCenter?.[1]})`
+                : undefined}
             />
           )) ?? [])}
           {regions.flatMap((region) => structures[region.id]?.stairs.map((stair) => (
-            <g key={`${region.id}-${stair.id}`} className={`detected-stair ${activeLevel === region.id ? "active" : ""}`}>
+            <g
+              key={`${region.id}-${stair.id}`}
+              className={`detected-stair ${activeLevel === region.id ? "active" : ""}`}
+              transform={structures[region.id]?.sourceRotationDegrees && structures[region.id]?.rotationCenter
+                ? `rotate(${structures[region.id].sourceRotationDegrees} ${structures[region.id].rotationCenter?.[0]} ${structures[region.id].rotationCenter?.[1]})`
+                : undefined}
+            >
               <rect x={stair.x} y={stair.y} width={stair.width} height={stair.height} />
               {Array.from({ length: Math.min(12, stair.stepCount) }, (_, index) => {
                 const count = Math.min(12, stair.stepCount);
@@ -911,6 +930,9 @@ function PlanReview({
             <g
               key={`${region.id}-${wall.id}`}
               className={`${activeLevel === region.id ? "active" : ""} ${activeLevel === region.id && selectedWallId === wall.id ? "selected" : ""}`}
+              transform={structures[region.id]?.sourceRotationDegrees && structures[region.id]?.rotationCenter
+                ? `rotate(${structures[region.id].sourceRotationDegrees} ${structures[region.id].rotationCenter?.[0]} ${structures[region.id].rotationCenter?.[1]})`
+                : undefined}
             >
               <line
                 className="detected-wall-hit"

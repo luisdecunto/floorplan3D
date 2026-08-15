@@ -8,6 +8,7 @@ export type DetectedOpening = {
   offset: number;
   width: number;
   confidence: number;
+  evidence?: "symbol" | "geometry" | "context";
 };
 
 export type DetectedWall = {
@@ -59,7 +60,11 @@ export type DetectedStructure = {
     topologyVotes: number;
     openingVotes: number;
     stairVotes: number;
+    rotationDegrees?: number;
   };
+  /** Rotation of the source plan relative to its own principal wall axes. */
+  sourceRotationDegrees?: number;
+  rotationCenter?: [number, number];
 };
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -72,7 +77,11 @@ type Segment = {
   density: number;
 };
 
-type GapEvidence = { kind: "door" | "window"; confidence: number } | null;
+type GapEvidence = {
+  kind: "door" | "window";
+  confidence: number;
+  evidence: "symbol" | "geometry" | "context";
+} | null;
 
 const clamp = (value: number, minimum: number, maximum: number) => Math.max(minimum, Math.min(maximum, value));
 
@@ -181,6 +190,132 @@ function createMask(
     }
   }
   return mask;
+}
+
+/**
+ * Floorplans need not be aligned to the image axes. Score pairs of dark pixels
+ * along two perpendicular directions and recover the plan's dominant local
+ * frame. Text and furniture contain short strokes in many directions; walls
+ * produce repeated support over several longer distances.
+ */
+function estimateDominantPlanRotation(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  bounds: Bounds,
+) {
+  const minimumDimension = Math.max(1, Math.min(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY));
+  const distances = [
+    Math.max(7, Math.round(minimumDimension * 0.035)),
+    Math.max(12, Math.round(minimumDimension * 0.075)),
+    Math.max(18, Math.round(minimumDimension * 0.13)),
+  ];
+  const points: Array<[number, number]> = [];
+  const stride = minimumDimension > 500 ? 3 : 2;
+  for (let y = bounds.minY + 2; y <= bounds.maxY - 2; y += stride) {
+    for (let x = bounds.minX + 2; x <= bounds.maxX - 2; x += stride) {
+      if (!mask[y * width + x]) continue;
+      let neighbourhood = 0;
+      for (let oy = -1; oy <= 1; oy += 1) {
+        for (let ox = -1; ox <= 1; ox += 1) neighbourhood += mask[(y + oy) * width + x + ox];
+      }
+      // Suppress isolated text/anti-alias pixels while retaining thin symbols.
+      if (neighbourhood >= 3) points.push([x, y]);
+    }
+  }
+  if (points.length < 40) return 0;
+
+  const supported = (x: number, y: number) => {
+    const px = Math.round(x);
+    const py = Math.round(y);
+    if (px < 1 || px >= width - 1 || py < 1 || py >= height - 1) return 0;
+    let hit = 0;
+    for (let oy = -1; oy <= 1; oy += 1) {
+      for (let ox = -1; ox <= 1; ox += 1) hit = Math.max(hit, mask[(py + oy) * width + px + ox]);
+    }
+    return hit;
+  };
+
+  let bestAngle = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let axisAlignedScore = Number.NEGATIVE_INFINITY;
+  for (let degrees = -44; degrees <= 45; degrees += 1) {
+    const angle = degrees * Math.PI / 180;
+    const directions = [
+      [Math.cos(angle), Math.sin(angle)],
+      [-Math.sin(angle), Math.cos(angle)],
+    ];
+    let score = 0;
+    const pointStride = Math.max(1, Math.ceil(points.length / 8500));
+    for (let index = 0; index < points.length; index += pointStride) {
+      const [x, y] = points[index];
+      directions.forEach(([dx, dy]) => {
+        distances.forEach((distance, distanceIndex) => {
+          const forward = supported(x + dx * distance, y + dy * distance);
+          const backward = supported(x - dx * distance, y - dy * distance);
+          score += (forward + backward) * (distanceIndex + 1);
+        });
+      });
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestAngle = degrees;
+    }
+    if (degrees === 0) axisAlignedScore = score;
+  }
+  // A one-degree preference commonly comes from asymmetric wall thickness or
+  // rasterisation. Avoid resampling an already aligned drawing for that noise.
+  return Math.abs(bestAngle) <= 1 || bestScore <= axisAlignedScore * 1.045 ? 0 : bestAngle;
+}
+
+function rotatePixelsAround(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  center: [number, number],
+  sourceRotationDegrees: number,
+) {
+  const result = new Uint8ClampedArray(width * height * 4).fill(255);
+  const angle = sourceRotationDegrees * Math.PI / 180;
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const [centerX, centerY] = center;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      // Destination is the deskewed image. Sample the source by rotating the
+      // destination point back into the photographed plan.
+      const dx = x - centerX;
+      const dy = y - centerY;
+      const sourceX = centerX + dx * cosine - dy * sine;
+      const sourceY = centerY + dx * sine + dy * cosine;
+      if (sourceX < 0 || sourceX >= width - 1 || sourceY < 0 || sourceY >= height - 1) continue;
+      // Use the darkest of the four sub-pixel neighbours. Ordinary bilinear
+      // filtering can erase a one-pixel door arc or balcony rail; this
+      // structure-preserving sampler retains those strokes for later masks.
+      const candidates = [
+        [Math.floor(sourceX), Math.floor(sourceY)],
+        [Math.ceil(sourceX), Math.floor(sourceY)],
+        [Math.floor(sourceX), Math.ceil(sourceY)],
+        [Math.ceil(sourceX), Math.ceil(sourceY)],
+      ];
+      let sourceIndex = (candidates[0][1] * width + candidates[0][0]) * 4;
+      let darkest = luminance(pixels, sourceIndex);
+      candidates.slice(1).forEach(([candidateX, candidateY]) => {
+        const candidateIndex = (candidateY * width + candidateX) * 4;
+        const candidateLuminance = luminance(pixels, candidateIndex);
+        if (candidateLuminance < darkest) {
+          darkest = candidateLuminance;
+          sourceIndex = candidateIndex;
+        }
+      });
+      const destinationIndex = (y * width + x) * 4;
+      result[destinationIndex] = pixels[sourceIndex];
+      result[destinationIndex + 1] = pixels[sourceIndex + 1];
+      result[destinationIndex + 2] = pixels[sourceIndex + 2];
+      result[destinationIndex + 3] = pixels[sourceIndex + 3];
+    }
+  }
+  return result;
 }
 
 function markLongRuns(mask: Uint8Array, width: number, height: number, bounds: Bounds, axis: Axis, minimumRun: number) {
@@ -531,6 +666,95 @@ function longestPerpendicularRun(mask: Uint8Array, width: number, height: number
   return longest;
 }
 
+function maskSupportedNear(mask: Uint8Array, width: number, height: number, x: number, y: number, radius: number) {
+  const centerX = Math.round(x);
+  const centerY = Math.round(y);
+  const searchRadius = Math.max(1, Math.round(radius));
+  for (let oy = -searchRadius; oy <= searchRadius; oy += 1) {
+    for (let ox = -searchRadius; ox <= searchRadius; ox += 1) {
+      const px = centerX + ox;
+      const py = centerY + oy;
+      if (px < 0 || px >= width || py < 0 || py >= height) continue;
+      if (mask[py * width + px]) return 1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Recognize a conventional swing-door glyph in a wall gap. The model is local
+ * to the wall: either gap end may be the hinge, the leaf may swing to either
+ * side, and several opening angles/radii are tested. Requiring both the radial
+ * leaf and the quarter-circle trace makes this substantially more selective
+ * than using generic dark pixels near a gap.
+ */
+function doorSymbolScore(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  axis: Axis,
+  line: number,
+  from: number,
+  to: number,
+  thickness: number,
+) {
+  const gap = to - from;
+  if (gap < Math.max(6, thickness * 0.9)) return { score: 0, leaf: 0, arc: 0 };
+  const point = (along: number, normal: number): [number, number] => (
+    axis === "horizontal" ? [along, line + normal] : [line + normal, along]
+  );
+  const tolerance = Math.max(1, thickness * 0.24);
+  let best = { score: 0, leaf: 0, arc: 0 };
+
+  for (const hingeAtStart of [true, false]) {
+    const hinge = hingeAtStart ? from : to;
+    const closedDirection = hingeAtStart ? 1 : -1;
+    for (const side of [-1, 1]) {
+      for (let openingDegrees = 55; openingDegrees <= 105; openingDegrees += 5) {
+        const openingAngle = openingDegrees * Math.PI / 180;
+        const leafAlongDirection = closedDirection * Math.cos(openingAngle);
+        const leafNormalDirection = side * Math.sin(openingAngle);
+        let leafHits = 0;
+        let leafSamples = 0;
+        for (let sample = 2; sample <= 12; sample += 1) {
+          const radius = gap * sample / 12;
+          const [x, y] = point(
+            hinge + leafAlongDirection * radius,
+            leafNormalDirection * radius,
+          );
+          leafHits += maskSupportedNear(mask, width, height, x, y, tolerance);
+          leafSamples += 1;
+        }
+        const leafScore = leafHits / Math.max(1, leafSamples);
+
+        let bestArcScore = 0;
+        for (const radiusScale of [0.84, 0.92, 1]) {
+          let arcHits = 0;
+          let arcSamples = 0;
+          for (let sample = 2; sample <= 14; sample += 1) {
+            const angle = openingAngle * sample / 14;
+            const radius = gap * radiusScale;
+            const [x, y] = point(
+              hinge + closedDirection * Math.cos(angle) * radius,
+              side * Math.sin(angle) * radius,
+            );
+            arcHits += maskSupportedNear(mask, width, height, x, y, tolerance);
+            arcSamples += 1;
+          }
+          bestArcScore = Math.max(bestArcScore, arcHits / Math.max(1, arcSamples));
+        }
+
+        // A real swing symbol has both features. Multiplication prevents a
+        // nearby table edge or isolated curve from becoming a door on its own.
+        const joint = Math.sqrt(leafScore * bestArcScore);
+        const score = joint * 0.72 + Math.min(leafScore, bestArcScore) * 0.28;
+        if (score > best.score) best = { score, leaf: leafScore, arc: bestArcScore };
+      }
+    }
+  }
+  return best;
+}
+
 function gapEvidence(
   mask: Uint8Array,
   windowMask: Uint8Array,
@@ -545,6 +769,7 @@ function gapEvidence(
 ): GapEvidence {
   const gap = to - from;
   if (gap <= Math.max(3, thickness * 0.75)) return null;
+  const symbol = doorSymbolScore(mask, width, height, axis, line, from, to, thickness);
   const radius = Math.max(5, Math.round(gap * 1.05));
   const perpendicular = Math.max(
     longestPerpendicularRun(mask, width, height, axis, from, line, radius),
@@ -584,20 +809,27 @@ function gapEvidence(
     ? Math.min(Math.abs(line - footprint.minY), Math.abs(line - footprint.maxY)) <= outerTolerance
     : Math.min(Math.abs(line - footprint.minX), Math.abs(line - footprint.maxX)) <= outerTolerance;
 
+  if (symbol.score >= 0.46 && symbol.leaf >= 0.42 && symbol.arc >= 0.34) {
+    return {
+      kind: "door",
+      confidence: clamp(0.62 + symbol.score * 0.34, 0.68, 0.97),
+      evidence: "symbol",
+    };
+  }
   if (onOuterWall && windowParallel >= 0.58) {
-    return { kind: "window", confidence: clamp(0.62 + windowParallel * 0.3, 0.64, 0.94) };
+    return { kind: "window", confidence: clamp(0.62 + windowParallel * 0.3, 0.64, 0.94), evidence: "geometry" };
   }
   if (perpendicular >= 0.34 && arcDensity >= 0.006) {
-    return { kind: "door", confidence: clamp(0.56 + perpendicular * 0.23 + arcDensity * 1.5, 0.58, 0.94) };
+    return { kind: "door", confidence: clamp(0.56 + perpendicular * 0.23 + arcDensity * 1.5, 0.58, 0.88), evidence: "geometry" };
   }
   const wallSpan = axis === "horizontal" ? footprint.maxX - footprint.minX : footprint.maxY - footprint.minY;
   if (!onOuterWall && gap <= wallSpan * 0.22 && (perpendicular >= 0.12 || arcDensity >= 0.003 || windowParallel >= 0.18)) {
     // Windows are very uncommon in partition walls. A bounded gap with either
     // a leaf, arc, or short cross-stroke is therefore stronger door evidence.
-    return { kind: "door", confidence: clamp(0.57 + perpendicular * 0.18 + arcDensity + windowParallel * 0.08, 0.58, 0.88) };
+    return { kind: "door", confidence: clamp(0.57 + perpendicular * 0.18 + arcDensity + windowParallel * 0.08, 0.58, 0.82), evidence: "context" };
   }
   if (windowParallel >= 0.34 || (onOuterWall && windowParallel >= 0.17)) {
-    return { kind: "window", confidence: clamp(0.55 + windowParallel * 0.4, 0.57, 0.93) };
+    return { kind: "window", confidence: clamp(0.55 + windowParallel * 0.4, 0.57, 0.93), evidence: "geometry" };
   }
   return null;
 }
@@ -718,6 +950,7 @@ function buildWalls(
           offset: wallEnd - wallStart,
           width: segment.from - wallEnd,
           confidence: evidence.confidence,
+          evidence: evidence.evidence,
         });
         const weight = segment.to - segment.from + 1;
         weightedLine = (weightedLine * totalWeight + segment.line * weight) / (totalWeight + weight);
@@ -886,6 +1119,7 @@ function recoverEmbeddedOpenings(
         offset: gapStart - from,
         width: gapWidth,
         confidence: Math.max(0.56, evidence.confidence - 0.03),
+        evidence: evidence.evidence,
       });
     };
 
@@ -916,63 +1150,6 @@ function recoverEmbeddedOpenings(
       }
     }
     return { ...wall, openings: openings.sort((a, b) => a.offset - b.offset) };
-  });
-}
-
-function promoteOutdoorAccessDoors(
-  walls: DetectedWall[],
-  outdoorAreas: DetectedOutdoorArea[],
-  footprint: Bounds,
-) {
-  if (!outdoorAreas.length) return walls;
-  return walls.map((wall) => {
-    const wallFrom = wall.axis === "horizontal" ? wall.start[0] : wall.start[1];
-    const wallTo = wall.axis === "horizontal" ? wall.end[0] : wall.end[1];
-    const wallLine = wall.axis === "horizontal" ? wall.start[1] : wall.start[0];
-    const wallLength = Math.max(1, wallTo - wallFrom);
-    const candidates: Array<{ area: DetectedOutdoorArea; openingIndex: number; score: number }> = [];
-
-    outdoorAreas.forEach((area) => {
-      const isHorizontalAccess = wall.axis === "horizontal" && (area.side === "top" || area.side === "bottom");
-      const isVerticalAccess = wall.axis === "vertical" && (area.side === "left" || area.side === "right");
-      if (!isHorizontalAccess && !isVerticalAccess) return;
-
-      const edge = area.side === "top"
-        ? footprint.minY
-        : area.side === "bottom"
-          ? footprint.maxY
-          : area.side === "left"
-            ? footprint.minX
-            : footprint.maxX;
-      if (Math.abs(wallLine - edge) > Math.max(8, wall.thickness * 2.4)) return;
-
-      const areaFrom = isHorizontalAccess ? area.x : area.y;
-      const areaTo = isHorizontalAccess ? area.x + area.width : area.y + area.height;
-      const areaCenter = (areaFrom + areaTo) / 2;
-      wall.openings.forEach((opening, openingIndex) => {
-        const openingFrom = wallFrom + opening.offset;
-        const openingTo = openingFrom + opening.width;
-        const overlap = Math.max(0, Math.min(openingTo, areaTo) - Math.max(openingFrom, areaFrom));
-        if (overlap < Math.min(opening.width, areaTo - areaFrom) * 0.35) return;
-        const openingCenter = (openingFrom + openingTo) / 2;
-        candidates.push({
-          area,
-          openingIndex,
-          score: Math.abs(openingCenter - areaCenter) / wallLength,
-        });
-      });
-    });
-
-    const best = candidates.sort((a, b) => a.score - b.score)[0];
-    if (!best) return wall;
-    return {
-      ...wall,
-      openings: wall.openings.map((opening, index) => (
-        index === best.openingIndex
-          ? { ...opening, kind: "door" as const, confidence: Math.max(opening.confidence, Math.min(0.9, best.area.confidence + 0.04)) }
-          : opening
-      )),
-    };
   });
 }
 
@@ -1480,7 +1657,7 @@ export function inspectStructureEvidence(
   return { bounds, threshold, strongMask, mediumMask, windowMask, rawSegments, wallThickness, structural, minimumDimension, minimumRun };
 }
 
-export function detectFloorStructure(
+function detectFloorStructureAligned(
   pixels: ArrayLike<number>,
   width: number,
   height: number,
@@ -1491,7 +1668,7 @@ export function detectFloorStructure(
   const footprintBounds = segmentBounds(thickCore.length ? thickCore : structural, bounds);
   const anchoredStructural = recoverWallAnchors(structural, strongMask, width, height, footprintBounds, wallThickness);
   const outdoorAreas = detectOutdoorAreas(rawSegments, footprintBounds, wallThickness);
-  const walls = promoteOutdoorAccessDoors(recoverEmbeddedOpenings(
+  const walls = recoverEmbeddedOpenings(
     trimUnsupportedInteriorWallTails(
       buildWalls(anchoredStructural, mediumMask, windowMask, width, height, wallThickness, footprintBounds),
       strongMask,
@@ -1506,7 +1683,7 @@ export function detectFloorStructure(
     width,
     height,
     footprintBounds,
-  ), outdoorAreas, footprintBounds);
+  );
   const stairs = detectStairs(rawSegments, mediumMask, width, height, footprintBounds, minimumDimension, wallThickness);
   const openingCount = walls.reduce((sum, wall) => sum + wall.openings.length, 0);
   const topologyVotes = walls.filter((wall) => walls.some((other) => other !== wall && (
@@ -1547,6 +1724,35 @@ export function detectFloorStructure(
       topologyVotes,
       openingVotes: openingCount,
       stairVotes: stairs.length,
+    },
+  };
+}
+
+export function detectFloorStructure(
+  pixels: ArrayLike<number>,
+  width: number,
+  height: number,
+  region: SourceRegion,
+): DetectedStructure {
+  const sourceBounds = paperBounds(pixels, width, height, region);
+  const sourceThreshold = otsuThreshold(pixels, width, sourceBounds);
+  const sourceMask = createMask(pixels, width, height, sourceBounds, sourceThreshold);
+  const rotationDegrees = estimateDominantPlanRotation(sourceMask, width, height, sourceBounds);
+  const center: [number, number] = [
+    (sourceBounds.minX + sourceBounds.maxX) / 2,
+    (sourceBounds.minY + sourceBounds.maxY) / 2,
+  ];
+  const analysisPixels = rotationDegrees
+    ? rotatePixelsAround(pixels, width, height, center, rotationDegrees)
+    : pixels;
+  const structure = detectFloorStructureAligned(analysisPixels, width, height, region);
+  return {
+    ...structure,
+    sourceRotationDegrees: rotationDegrees,
+    rotationCenter: center,
+    diagnostics: {
+      ...structure.diagnostics,
+      rotationDegrees,
     },
   };
 }

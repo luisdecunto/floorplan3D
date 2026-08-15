@@ -98,6 +98,7 @@ if (!manifest) {
           return Math.abs(a.offset + a.width / 2 - wallCenter) - Math.abs(b.offset + b.width / 2 - wallCenter);
         })[0];
         assert.equal(balconyAccess?.kind, "door", "the central balcony access symbol should become a door, not a window");
+        assert.equal(balconyAccess?.evidence, "symbol", "the balcony door must be supported by its leaf and swing arc, not its position");
         const bedroomDoorWall = topPlan.walls.find((wall) => {
           const normalizedX = (wall.start[0] - topPlan.footprint.x) / topPlan.footprint.width;
           return wall.axis === "vertical"
@@ -138,4 +139,23 @@ if (!manifest) {
       }
     });
   }
+
+  test("the validation residence remains structural when the sheet is rotated", async () => {
+    const fixture = manifest.fixtures.find(({ id }) => id === "fp-001");
+    assert.ok(fixture);
+    const buffer = await readFile(new URL(fixture.file, fixtureDirectory));
+    const { data, info } = await sharp(buffer)
+      .rotate(9, { background: { r: 255, g: 255, b: 255, alpha: 1 } })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const regions = detectPlanRegions(data, info.width, info.height);
+    assert.equal(regions.length, 2, "rotation must not merge the two floor regions");
+    const structures = detectFloorStructures(data, info.width, info.height, regions);
+    const values = Object.values(structures);
+    assert.ok(values.every((structure) => Math.abs(Math.abs(structure.sourceRotationDegrees ?? 0) - 9) <= 2), `expected about 9° correction, received ${values.map((structure) => structure.sourceRotationDegrees).join(", ")}`);
+    assert.ok(values.every((structure) => structure.walls.length >= 5), "both rotated floors should retain usable wall networks");
+    assert.ok(values.flatMap((structure) => structure.walls).flatMap((wall) => wall.openings)
+      .some((opening) => opening.kind === "door" && opening.evidence === "symbol"), "the rotated residence should retain a symbol-supported swing door");
+  });
 }
